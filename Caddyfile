@@ -1,0 +1,93 @@
+# svelte-ui-template — Caddyfile
+#
+# Reference production host. Ships in the release tarball alongside the static
+# bundle (flat layout: this file sits next to index.html / assets/). Caddy
+# provisions and renews TLS via Let's Encrypt automatically as long as
+# SITE_ADDRESS resolves to this host on ports 80 + 443.
+#
+# Usage:
+#   tar -xzf svelte-ui-template-<version>.tar.gz -C /var/www/app --strip-components=1
+#   cd /var/www/app
+#   export SITE_ADDRESS=app.example.com API_UPSTREAM=api.internal:8080 ACME_EMAIL=ops@example.com
+#   caddy run --config Caddyfile
+#
+# Env vars:
+#   SITE_ADDRESS — hostname clients reach this UI on (real DNS name for ACME).
+#   API_UPSTREAM — host:port of the Go API / BFF backend.
+#   SITE_ROOT    — document root. Defaults to "." (this directory). Use ./dist
+#                  when testing from the source tree.
+#   ACME_EMAIL   — contact email for the Let's Encrypt account.
+#
+# Homeserver / LAN-only (.local hostnames, IP-only, or any host Let's Encrypt
+# can't reach on :80): replace the `tls { … }` block with `tls internal` and
+# delete the `http://{$SITE_ADDRESS}` redirect block. Run `caddy trust` on each
+# client to install the local root. See the README "Releases" section.
+
+{
+	email {$ACME_EMAIL}
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+# Explicit HTTP listener that 308-redirects everything to HTTPS.
+http://{$SITE_ADDRESS} {
+	redir https://{host}{uri} permanent
+}
+
+{$SITE_ADDRESS} {
+	root * {$SITE_ROOT:.}
+	encode zstd gzip
+
+	tls {
+		protocols tls1.2 tls1.3
+	}
+
+	# Security headers at the edge. The CSP here is authoritative — and unlike
+	# the <meta> tag in index.html it can express frame-ancestors. Keep the two
+	# in sync. script-src is strict ('self', no unsafe-inline/eval); style-src
+	# carries the documented 'unsafe-inline' compromise for Vite's runtime CSS
+	# injection. See .claude/rules/security.md and decisions.md.
+	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		# Don't leak the Caddy version.
+		-Server
+	}
+
+	# Reverse-proxy the API, auth, and health surfaces to the backend so the SPA
+	# stays same-origin (enables SameSite=Strict session cookies, no CORS).
+	@backend path /api/* /auth/* /health
+	handle @backend {
+		reverse_proxy {$API_UPSTREAM} {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# Long-lived caching for fingerprinted Vite assets.
+	@assets path *.js *.css *.woff *.woff2 *.png *.svg *.ico
+	handle @assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server {
+			hide Caddyfile
+		}
+	}
+
+	# SPA fallback — anything that isn't a real file serves index.html so deep
+	# links and client-side routes resolve.
+	handle {
+		header Cache-Control "no-store, no-cache, must-revalidate"
+		try_files {path} /index.html
+		file_server {
+			hide Caddyfile
+		}
+	}
+}

@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  # Pre-commit runs locally but is skippable via `git commit --no-verify`.
+  # This job makes every configured hook mandatory on the server side, so
+  # gitleaks + semgrep are enforced.
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # No `version:` here — it is read from package.json's `packageManager`
+      # field. Specifying both errors with ERR_PNPM_BAD_PM_VERSION.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install semgrep + pre-commit
+        run: pip install semgrep==1.156.0 pre-commit==4.6.0
+
+      - name: Cache pre-commit environment
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # No `version:` here — it is read from package.json's `packageManager`
+      # field. Specifying both errors with ERR_PNPM_BAD_PM_VERSION.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate MSW worker
+        run: pnpm exec msw init public --no-save
+
+      - name: Lint
+        run: pnpm exec eslint .
+
+      - name: Format check
+        run: pnpm exec prettier --check .
+
+      - name: Type-check
+        run: |
+          pnpm exec svelte-check --tsconfig ./tsconfig.app.json
+          pnpm exec tsc -p tsconfig.node.json
+
+      # Pins extract-changelog.sh behaviour — the release pipeline depends on it.
+      # No browser needed, so it runs before the Playwright install and fails fast.
+      - name: Script tests
+        run: node --test scripts/*.test.mjs
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Unit + component tests (coverage)
+        run: pnpm exec vitest run --coverage
+
+      - name: Build
+        run: pnpm build
+
+      - name: Bundle-size budget
+        run: node scripts/check-bundle-size.mjs
+
+      - name: E2E (Playwright)
+        run: pnpm exec playwright test
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: ignore
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+
+  # Catches release-pipeline regressions on PR rather than at tag time: that the
+  # release tarball still assembles (svelte-check + build + flat layout +
+  # Caddyfile) and that the CHANGELOG has extractable content. Mirrors
+  # go-api-template's goreleaser-config job.
+  release-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # No `version:` here — it is read from package.json's `packageManager`
+      # field. Specifying both errors with ERR_PNPM_BAD_PM_VERSION.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The release body is the CHANGELOG section; confirm the script can extract
+      # content from the current changelog (the [Unreleased] section is always
+      # present in the template). A real tag extracts `## [X.Y.Z]` instead.
+      - name: CHANGELOG is extractable
+        run: sh ./scripts/extract-changelog.sh Unreleased CHANGELOG.md > /dev/null
+
+      # Assemble the release tarball exactly as `make prod-bundle` does, so a
+      # broken build or packaging step fails here, not at tag time.
+      - name: Dry-run release packaging
+        run: make prod-bundle

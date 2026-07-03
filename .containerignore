@@ -1,0 +1,14 @@
+node_modules
+dist
+coverage
+playwright-report
+test-results
+.git
+.env
+.env.*
+!.env.example
+*.log
+svelte-ui-template-*/
+svelte-ui-template-*.tar.gz
+*.sbom.json
+checksums.txt

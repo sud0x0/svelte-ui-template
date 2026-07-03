@@ -1,0 +1,43 @@
+# ============================================================================
+# Production image — an ALTERNATIVE to the tarball release.
+# ============================================================================
+# Multi-stage: build the static bundle with Node, then serve it with Caddy
+# (same Caddyfile the tarball ships). Use this for image-based deploys; use the
+# release tarball (.github/workflows/release.yml) for static-host deploys.
+#
+# Build:  podman build -f container.prod -t svelte-ui-template:latest .
+# Run:    podman run -p 8080:80 -p 8443:443 \
+#           -e SITE_ADDRESS=app.example.com \
+#           -e API_UPSTREAM=api.internal:8080 \
+#           -e ACME_EMAIL=ops@example.com \
+#           svelte-ui-template:latest
+#
+# Runtime env (consumed by the Caddyfile): SITE_ADDRESS, API_UPSTREAM, ACME_EMAIL.
+# LAN/homeserver: see the Caddyfile header for the `tls internal` swap.
+
+# --- build stage ------------------------------------------------------------
+FROM node:22-alpine AS build
+
+RUN npm install -g pnpm@10
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm build
+
+# --- serve stage ------------------------------------------------------------
+FROM caddy:2-alpine
+
+# The Caddyfile serves the SPA from $SITE_ROOT (with the history fallback) and
+# reverse-proxies /api,/auth,/health to $API_UPSTREAM.
+ENV SITE_ROOT=/srv
+COPY --from=build /app/dist /srv
+COPY Caddyfile /etc/caddy/Caddyfile
+
+EXPOSE 80 443
+
+# The caddy image's default entrypoint runs
+#   caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+# so no CMD override is needed.

@@ -1,0 +1,57 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Test + coverage output
+coverage
+playwright-report
+test-results
+.svelte-kit
+tests/**/__screenshots__
+.vitest-attachments
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Local files
+*.local
+
+# pre-commit virtualenv
+.venv/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor directories and files
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Release artefacts
+svelte-ui-template-*/
+svelte-ui-template-*.tar.gz
+*.sbom.json
+checksums.txt
+
+# NOTE: unlike a private app, this is a TEMPLATE — `.claude/` and `CLAUDE.md`
+# are part of the product and ARE committed. Do not ignore them.

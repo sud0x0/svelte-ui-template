@@ -1,0 +1,145 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Read-only at the workflow level. Each job widens only what it needs.
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # publish GitHub Releases
+      id-token: write # OIDC for SLSA provenance signing
+    outputs:
+      hashes: ${{ steps.subjects.outputs.hashes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # No `version:` — read from package.json's `packageManager` field.
+      # Specifying both errors with ERR_PNPM_BAD_PM_VERSION.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Source the release notes from the hand-authored CHANGELOG.md section.
+      # extract-changelog.sh exits non-zero if the `## [X.Y.Z]` section is
+      # missing or empty, which fails the release here — BEFORE building — and
+      # enforces the human-authored-changelog rule. Run `make changelog-check
+      # VERSION=x.y.z` locally before tagging to catch this early.
+      - name: Extract release notes from CHANGELOG
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#v}"
+          sh ./scripts/extract-changelog.sh "$VERSION" > /tmp/release-notes.md
+          echo "Release notes:"; cat /tmp/release-notes.md
+
+      - name: Type-check
+        run: pnpm exec svelte-check --tsconfig ./tsconfig.app.json
+
+      - name: Build static bundle
+        run: pnpm build
+
+      - name: Bundle-size budget
+        run: node scripts/check-bundle-size.mjs
+
+      # Flat layout: the version-named directory holds the Caddyfile plus the
+      # index.html / assets/ siblings, so `tar -xzf … --strip-components=1`
+      # lands a ready-to-serve directory with no inner dist/ wrapper.
+      - name: Package release tarball
+        id: bundle
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#v}"
+          TARBALL="svelte-ui-template-${VERSION}.tar.gz"
+          STAGE="svelte-ui-template-${VERSION}"
+          mkdir -p "$STAGE"
+          cp -R dist/. "$STAGE/"
+          cp Caddyfile "$STAGE/"
+          tar -czf "$TARBALL" "$STAGE"
+          {
+            echo "version=$VERSION"
+            echo "tarball=$TARBALL"
+          } >> "$GITHUB_OUTPUT"
+
+      # SBOM of the dependency closure. Scan the project (package.json + lockfile)
+      # so syft attributes every JS package shipped in the bundle.
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0.22.0
+
+      - name: Generate SBOM
+        env:
+          VERSION: ${{ steps.bundle.outputs.version }}
+        run: |
+          set -euo pipefail
+          syft scan dir:. \
+            --source-name "svelte-ui-template" \
+            --source-version "$VERSION" \
+            -o spdx-json="svelte-ui-template-${VERSION}.sbom.json"
+
+      - name: Generate checksums
+        env:
+          VERSION: ${{ steps.bundle.outputs.version }}
+          TARBALL: ${{ steps.bundle.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          sha256sum "$TARBALL" "svelte-ui-template-${VERSION}.sbom.json" > checksums.txt
+
+      # SLSA generic-generator subjects: "<sha256>  <filename>" lines, base64.
+      - name: Compute SLSA subjects
+        id: subjects
+        env:
+          VERSION: ${{ steps.bundle.outputs.version }}
+          TARBALL: ${{ steps.bundle.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          HASHES=$(sha256sum "$TARBALL" "svelte-ui-template-${VERSION}.sbom.json" | base64 -w0)
+          if [ -z "$HASHES" ]; then
+            echo "::error title=Empty hashes::sha256sum produced no output"
+            exit 1
+          fi
+          echo "hashes=$HASHES" >> "$GITHUB_OUTPUT"
+
+      # The release body is the hand-authored CHANGELOG.md section extracted
+      # above (single source of release notes). Download-verification and
+      # run-the-site instructions live in the README's "Releases" section, so
+      # the body stays exactly what the maintainer wrote.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body_path: /tmp/release-notes.md
+          files: |
+            ${{ steps.bundle.outputs.tarball }}
+            svelte-ui-template-${{ steps.bundle.outputs.version }}.sbom.json
+            checksums.txt
+
+  # SLSA Level 3 build provenance for the tarball + SBOM. Attaches an
+  # <release>.intoto.jsonl file to the GitHub Release.
+  binary-provenance:
+    needs: [release]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true

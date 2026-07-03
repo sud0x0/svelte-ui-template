@@ -1,0 +1,58 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+
+  # NOTE: Conventional Commits are *requested, not enforced* (see CLAUDE.md) —
+  # there is deliberately no commit-msg hook, matching go-api-template's stance.
+
+  # Secrets detection (scans .claude/ too — it is not allowlisted).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      # Auto-install node_modules if missing. The eslint/prettier/svelte-check
+      # hooks below resolve plugins from the local install, so they fail noisily
+      # when deps are absent (right after `make clean` or a fresh clone). Runs
+      # before any tool hook so the rest of the pipeline has a usable install.
+      - id: ensure-node-deps
+        name: ensure node_modules
+        entry: sh -c 'test -d node_modules || pnpm install --frozen-lockfile'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: eslint
+        name: eslint
+        entry: pnpm exec eslint --fix
+        language: system
+        files: \.(ts|svelte)$
+
+      - id: prettier
+        name: prettier
+        entry: pnpm exec prettier --write
+        language: system
+        files: \.(ts|svelte|json|md|yaml|css|html)$
+
+      - id: svelte-check
+        name: svelte-check
+        entry: pnpm exec svelte-check --tsconfig ./tsconfig.app.json
+        language: system
+        files: \.(ts|svelte)$
+        pass_filenames: false
+
+  - repo: https://github.com/semgrep/pre-commit
+    rev: v1.156.0
+    hooks:
+      - id: semgrep
+        args:
+          - --config=auto
+          - --error
+          - --skip-unknown-extensions

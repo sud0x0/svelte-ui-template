@@ -1,0 +1,17 @@
+title = "gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Global allowlist"
+# NOTE: `.claude/` is deliberately NOT allowlisted — secrets must never live in
+# the agent rules/skills either, so gitleaks scans them too.
+paths = [
+    '''pnpm-lock\.yaml$''',
+    '''\.gitleaks\.toml$''',
+    '''(?i)\.(jpg|jpeg|png|gif|svg|ico)$''',
+    '''node_modules/''',
+    '''dist/''',
+    '''public/mockServiceWorker\.js$''',
+]

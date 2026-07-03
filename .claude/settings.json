@@ -1,0 +1,19 @@
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(pnpm *)",
+      "Bash(pnpm exec *)",
+      "Bash(npx vite *)",
+      "Bash(npx playwright *)",
+      "Bash(eslint *)",
+      "Bash(prettier *)",
+      "Bash(svelte-check *)",
+      "Bash(vitest *)",
+      "Bash(node scripts/*)",
+      "Bash(podman ps *)",
+      "Bash(podman logs *)"
+    ]
+  }
+}

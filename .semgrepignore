@@ -1,0 +1,8 @@
+# Build, dependency, and report artefacts — not source under review.
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+# Generated MSW Service Worker (vendored, minified).
+public/mockServiceWorker.js

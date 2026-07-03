@@ -1,0 +1,73 @@
+/*
+ * Theming via CSS variables, driven by the `data-theme` attribute on <html>
+ * (set in App.svelte from the preferences store). Components reference these
+ * variables only — no per-component colour literals. (architecture rule)
+ */
+
+:root,
+:root[data-theme='light'] {
+  --bg-page: #f7f7f8;
+  --bg-surface: #ffffff;
+  --text-primary: #1a1a1a;
+  --text-secondary: #5c5c5c;
+  --border: #e2e2e5;
+  --accent: #2f6feb;
+  --danger: #c0392b;
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg-page: #16181d;
+  --bg-surface: #1f222a;
+  --text-primary: #f2f3f5;
+  --text-secondary: #a4a8b3;
+  --border: #2f333d;
+  --accent: #6ea8fe;
+  --danger: #ff6b5e;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg-page);
+  color: var(--text-primary);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+code {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 0.9em;
+  background: var(--bg-page);
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+}

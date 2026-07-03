@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!--
+      Content-Security-Policy, enforced even when the static bundle is served
+      without Caddy (e.g. `vite preview`), so the policy is testable in CI.
+      Caddy sets the authoritative header in production AND adds the directives
+      a <meta> tag cannot express (frame-ancestors). See the Caddyfile and
+      .claude/rules/security.md.
+
+      script-src 'self'  — strict: no 'unsafe-inline', no 'unsafe-eval'. The
+        build emits no inline scripts (modulepreload polyfill disabled,
+        assetsInlineLimit: 0), so this holds with no hashing.
+      style-src 'self' 'unsafe-inline' — documented compromise: Vite injects
+        code-split CSS via runtime <style> elements; style injection is lower
+        risk than script. See decisions.md.
+      frame-ancestors is intentionally absent here — it is ignored in a <meta>
+        tag (browsers warn) and is delivered as a header by the Caddyfile.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
+
+    <title>Svelte UI Template</title>
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
