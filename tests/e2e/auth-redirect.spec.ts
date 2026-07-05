@@ -27,7 +27,8 @@ test.describe('auth-redirect seam (bff mode)', () => {
     await page.goto('/')
 
     await expect.poll(() => loginUrl).not.toBeNull()
-    const url = new URL(loginUrl as string)
+    // The poll above guarantees loginUrl is set by the time we get here.
+    const url = new URL(loginUrl!)
     expect(url.pathname).toBe('/auth/login')
     // returnTo preserves the intended destination.
     expect(url.searchParams.get('return_to')).toBe('/')

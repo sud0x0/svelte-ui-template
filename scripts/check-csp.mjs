@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Loads the built bundle in a real browser and fails if the page raises any
-// Content-Security-Policy violations, or any script-src violation specifically.
-// This is how the CSP rule in .claude/rules/security.md is *proven*, not asserted.
+// Loads the built bundle in a real browser, walks the code-split routes via the
+// SPA nav, and fails if the page raises any Content-Security-Policy violations, or
+// any script-src violation specifically. This is how the CSP rule in
+// .claude/rules/security.md is *proven*, not asserted.
 //
 // Usage:
 //   pnpm build && pnpm exec vite preview --port 4173 --strictPort &
@@ -43,6 +44,17 @@ if (!response || !response.ok()) {
   console.error(`✗ Failed to load ${url} (status ${response?.status()})`)
   await browser.close()
   process.exit(1)
+}
+
+// Exercise the CODE-SPLIT routes through the SPA path, not fresh gotos: each
+// route is a lazy import() whose chunk injects its CSS via a runtime <style>
+// element — the exact `style-src 'unsafe-inline'` compromise under test. Clicking
+// the in-page nav links loads those chunks client-side (History API, no reload),
+// so a CSP that only holds for the initial shell but breaks on a lazily-loaded
+// route is caught here. We visit /login and an unknown (404) path.
+for (const href of ['/login', '/does-not-exist']) {
+  await page.click(`a[href="${href}"]`)
+  await page.waitForLoadState('networkidle')
 }
 
 const reported = await page.evaluate(() => window.__cspViolations || [])

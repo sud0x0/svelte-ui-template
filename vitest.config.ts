@@ -9,6 +9,12 @@ import { playwright } from '@vitest/browser-playwright'
 // browserless CI — see .claude/rules/decisions.md.
 export default defineConfig({
   plugins: [svelte()],
+  // The MSW worker is test-only tooling and must NOT ship in the production
+  // bundle (MSW's own docs + the worker header say so). It lives under
+  // tests/public/ — never the app's public/ — and this test-only publicDir makes
+  // Vitest's browser server serve it at /mockServiceWorker.js. The app build
+  // (vite.config.ts) keeps the real public/, so `vite build` never copies it.
+  publicDir: 'tests/public',
   test: {
     // MSW worker + any global setup is registered here.
     setupFiles: ['./tests/mocks/setup.ts'],

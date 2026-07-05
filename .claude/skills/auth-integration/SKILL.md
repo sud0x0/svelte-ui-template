@@ -16,16 +16,33 @@ of that belongs in the browser.
 
 The SPA assumes these same-origin endpoints (proxied by Caddy to the Go API):
 
-| Endpoint         | Method | Responsibility                                                                                                                                                                                                     |
-| ---------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/auth/login`    | GET    | Build the OIDC Authorization Code + PKCE (S256) request with `state` (CSRF on the redirect) and `nonce` (ID-token replay); 302 to the IdP discovered via `.well-known/openid-configuration`. Honour `?return_to=`. |
-| `/auth/callback` | GET    | Validate `state`; exchange the code; validate the ID token (JWKS/`kid`, `iss`, `aud`, `exp`, `nbf`, `nonce`, **server-side `alg` allowlist**); set the session cookie; redirect to `return_to`.                    |
-| `/auth/me`       | GET    | Return the current `CurrentUser` resolved from the server-side session. **Never** returns a token.                                                                                                                 |
-| `/auth/logout`   | POST   | Clear the session cookie, then RP-initiated logout at the IdP `end_session_endpoint`.                                                                                                                              |
+| Endpoint         | Method | Responsibility                                                                                                                                                                                                                                              |
+| ---------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/auth/login`    | GET    | Build the OIDC Authorization Code + PKCE (S256) request with `state` (CSRF on the redirect) and `nonce` (ID-token replay); 302 to the IdP discovered via `.well-known/openid-configuration`. Honour `?return_to=` **only after validating it** (see below). |
+| `/auth/callback` | GET    | Validate `state`; exchange the code; validate the ID token (JWKS/`kid`, `iss`, `aud`, `exp`, `nbf`, `nonce`, **server-side `alg` allowlist**); set the session cookie; redirect to the **validated** `return_to` (else `/`).                                |
+| `/auth/me`       | GET    | Return the current `CurrentUser` resolved from the server-side session. **Never** returns a token.                                                                                                                                                          |
+| `/auth/logout`   | POST   | Clear the session cookie, then RP-initiated logout at the IdP `end_session_endpoint`.                                                                                                                                                                       |
+
+**`return_to` MUST be validated at the BFF — an unvalidated redirect target is an
+open redirect** ([OWASP Unvalidated Redirects & Forwards](https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html)).
+Accept it **only** as a same-site relative path: it MUST start with a single `/`
+and MUST be rejected if it starts with `//` or `/\` (protocol-relative), contains
+a backslash, or carries any scheme or authority (`https:`, `javascript:`,
+`user@host`, …). On any failure, fall back to `/`. Do this server-side; the SPA
+passes `return_to` through opaquely and cannot be trusted to sanitise it.
 
 Cookie rules (BFF sets): `HttpOnly; Secure; SameSite=Strict`, `__Host-` prefix.
-A readable (non-HttpOnly) `csrf` cookie for the double-submit control. The ID
-token is **never** sent to `/api` resource endpoints — it is not an API credential.
+Plus a **readable** (non-HttpOnly) `csrf` cookie for the double-submit control —
+its value MUST be a **session-bound HMAC token** (the _signed_ double-submit
+pattern), not a bare random value: OWASP notes the naive double-submit cookie is
+still forgeable via cookie injection from a sibling subdomain / MITM, so it says
+"always prefer the Signed Double-Submit Cookie pattern with session-bound HMAC
+tokens" ([OWASP CSRF](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)).
+`Sec-Fetch-Site` (Fetch-Metadata) validation with an Origin-header fallback is the
+acceptable alternative. Either way the SPA is unchanged — it just echoes whatever
+`csrf` cookie the BFF set back in `X-CSRF-Token` (`client.ts`); the BFF verifies
+the HMAC. The ID token is **never** sent to `/api` resource endpoints — it is not
+an API credential.
 
 ## SPA-side steps (filling the stubs)
 

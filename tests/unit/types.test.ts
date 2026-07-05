@@ -10,11 +10,26 @@ describe('boundary guards', () => {
 
   it('assertHealthResponse accepts valid and rejects invalid', () => {
     expect(assertHealthResponse({ status: 'ok' }).status).toBe('ok')
+    expect(assertHealthResponse({ status: 'ok', version: '1.2.3' }).version).toBe('1.2.3')
     expect(() => assertHealthResponse({})).toThrow(/Malformed HealthResponse/)
+    // A present-but-non-string `version` must be rejected, not silently accepted.
+    expect(() => assertHealthResponse({ status: 'ok', version: 42 })).toThrow(
+      /Malformed HealthResponse/
+    )
   })
 
   it('assertCurrentUser accepts valid and rejects invalid', () => {
     expect(assertCurrentUser({ id: '1', displayName: 'n' }).id).toBe('1')
+    expect(assertCurrentUser({ id: '1', displayName: 'n', roles: ['user'] }).roles).toEqual([
+      'user',
+    ])
     expect(() => assertCurrentUser({ id: '1' })).toThrow(/Malformed CurrentUser/)
+    // `roles` present but not an array of strings must be rejected.
+    expect(() => assertCurrentUser({ id: '1', displayName: 'n', roles: 'user' })).toThrow(
+      /Malformed CurrentUser/
+    )
+    expect(() => assertCurrentUser({ id: '1', displayName: 'n', roles: [1, 2] })).toThrow(
+      /Malformed CurrentUser/
+    )
   })
 })

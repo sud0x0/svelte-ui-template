@@ -19,6 +19,12 @@ const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
  * readable (non-HttpOnly) `csrf` cookie; we echo it back in `X-CSRF-Token` on
  * unsafe methods. In disabled mode there is no such cookie, so this returns
  * `null` and no header is attached — the seam is present and correct, just inert.
+ *
+ * SECURITY: the SPA only ECHOES the cookie — it never mints or validates the
+ * token. The BFF must set the `csrf` cookie value to a session-bound HMAC token
+ * (the SIGNED double-submit pattern, not a bare random value) and verify the
+ * HMAC server-side; the naive double-submit cookie is forgeable via cookie
+ * injection. See .claude/rules/security.md rule 2 and decisions.md #3.
  */
 function readCsrfToken(): string | null {
   // TODO(auth): if the BFF names the cookie differently or you switch to
@@ -62,7 +68,11 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const method = (options.method ?? 'GET').toUpperCase()
 
   const headers = new Headers(options.headers)
-  if (options.body !== undefined && !headers.has('Content-Type')) {
+  // JSON-only by contract: callers pass a JSON string body. Set the JSON
+  // Content-Type only for a string body — never blanket-tag a non-string body
+  // (e.g. a FormData/Blob would set its own type). FormData support is out of
+  // scope by design.
+  if (typeof options.body === 'string' && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
 

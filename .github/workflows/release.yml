@@ -79,8 +79,12 @@ jobs:
             echo "tarball=$TARBALL"
           } >> "$GITHUB_OUTPUT"
 
-      # SBOM of the dependency closure. Scan the project (package.json + lockfile)
-      # so syft attributes every JS package shipped in the bundle.
+      # SBOM of the DEV/BUILD dependency closure. `syft scan dir:.` catalogues the
+      # source tree — package.json, the lockfile, and the installed node_modules —
+      # i.e. every package used to BUILD the bundle, not what ships in it. The
+      # shipped bundle itself has ZERO runtime dependencies (the template pins none),
+      # so the SBOM's value here is provenance over the build toolchain, not a
+      # manifest of shipped packages.
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@62ad5284b8ced813296287a0b63906cb364b73ee # v0.22.0
 

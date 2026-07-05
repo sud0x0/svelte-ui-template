@@ -16,12 +16,23 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
+    // Parity with tsconfig.node.json. `verbatimModuleSyntax` is already inherited
+    // from the @tsconfig/svelte base (Svelte preprocess needs `import type`);
+    // `noUncheckedSideEffectImports` is not in that base, so set it here to flag a
+    // side-effect import of a non-existent module.
+    "noUncheckedSideEffectImports": true,
 
     /* Type-check JS in `.svelte`/`.js` files. */
     "allowJs": true,
     "checkJs": true,
     "moduleDetection": "force"
   },
-  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "tests/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.js",
+    "src/**/*.svelte",
+    "tests/**/*.ts",
+    "tests/**/*.svelte"
+  ],
   "exclude": ["tests/e2e/**"]
 }

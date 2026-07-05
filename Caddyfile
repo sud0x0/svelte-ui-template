@@ -50,7 +50,12 @@ http://{$SITE_ADDRESS} {
 	# injection. See .claude/rules/security.md and decisions.md.
 	header {
 		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		# HSTS without `preload`: preload is a deliberate operator opt-in, not a
+		# safe default. It requires submitting this domain to the browser preload
+		# list (hstspreload.org), forces HTTPS on EVERY subdomain, and is slow and
+		# hard to reverse (removal can take months to propagate). An operator who
+		# owns the whole domain tree can append `; preload`.
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
@@ -72,8 +77,12 @@ http://{$SITE_ADDRESS} {
 		}
 	}
 
-	# Long-lived caching for fingerprinted Vite assets.
-	@assets path *.js *.css *.woff *.woff2 *.png *.svg *.ico
+	# Long-lived, immutable caching ONLY for fingerprinted Vite output. Vite
+	# writes every content-hashed asset under /assets/, so a changed file gets a
+	# new filename — safe to cache for a year. Matching by /assets/* (not by
+	# extension) keeps non-fingerprinted root files (favicon.svg, icons.svg) OUT
+	# of the immutable bucket, where a year-long stale copy would be a bug.
+	@assets path /assets/*
 	handle @assets {
 		header Cache-Control "public, max-age=31536000, immutable"
 		file_server {
@@ -81,8 +90,22 @@ http://{$SITE_ADDRESS} {
 		}
 	}
 
-	# SPA fallback — anything that isn't a real file serves index.html so deep
-	# links and client-side routes resolve.
+	# Non-fingerprinted static files at the document root (favicon.svg,
+	# icons.svg, …). Their names are STABLE, so a replaced file must be
+	# revalidated — cache briefly with must-revalidate, never immutable.
+	# index.html is deliberately excluded (.html is not listed): it falls through
+	# to the no-store SPA handler below so a new deploy is seen at once.
+	@rootstatic path *.svg *.ico *.png *.webp *.gif *.woff *.woff2 *.json *.txt *.webmanifest
+	handle @rootstatic {
+		header Cache-Control "public, max-age=3600, must-revalidate"
+		file_server {
+			hide Caddyfile
+		}
+	}
+
+	# SPA fallback — index.html and anything that isn't a real file serves
+	# index.html so deep links and client-side routes resolve. no-store keeps the
+	# HTML shell (and its asset references) fresh on every deploy.
 	handle {
 		header Cache-Control "no-store, no-cache, must-revalidate"
 		try_files {path} /index.html

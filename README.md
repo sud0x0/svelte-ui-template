@@ -39,7 +39,6 @@ auth-seam demo). No tasks, categories, or charts.
 - [Commit messages](#commit-messages)
 - [Makefile reference](#makefile-reference)
 - [Changelog](#changelog)
-- [The `.claude/` system](#the-claude-system)
 - [TODO](#todo)
 
 ---
@@ -289,7 +288,8 @@ The source of truth is
   documented compromise for Vite's runtime CSS injection (decisions #4). The
   policy is in the `Caddyfile` (authoritative) and a `<meta>` tag (for
   `vite preview`). **Proven** by `make csp-check`, not asserted.
-- **Edge security headers** in the `Caddyfile`: HSTS (preload), `nosniff`,
+- **Edge security headers** in the `Caddyfile`: HSTS (`includeSubDomains`;
+  `preload` left off as an operator opt-in), `nosniff`,
   `X-Frame-Options: DENY` + `frame-ancestors 'none'`, `Referrer-Policy`,
   `Permissions-Policy`, `Cross-Origin-Opener-Policy`, `-Server`.
 - **Boundary validation** of API JSON, **no secrets in the bundle**, gitleaks +
@@ -416,15 +416,6 @@ Add entries to `## [Unreleased]` as you ship; before tagging, move them into a n
 dated `## [X.Y.Z]` section. That section's body becomes the GitHub Release notes
 (see [Releases](#releases)) — **commit messages do not feed the changelog**, and a
 missing or empty section fails the release.
-
-## The `.claude/` system
-
-- [`CLAUDE.md`](CLAUDE.md) — conventions + the verification loop, loaded each session.
-- [`rules/security.md`](.claude/rules/security.md) — the security source of truth.
-- [`rules/decisions.md`](.claude/rules/decisions.md) — settled trade-offs (don't relitigate).
-- [`skills/`](.claude/skills/) — `new-component`, `new-route`, `new-api-resource`,
-  `auth-integration`, `security-review`, `architecture-review`, `performance-review`.
-- [`settings.json`](.claude/settings.json) — `includeCoAuthoredBy: false` + a durable allow-list.
 
 ## TODO
 

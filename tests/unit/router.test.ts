@@ -6,6 +6,7 @@ import {
   normalisePath,
   navigate,
   currentPath,
+  routeComponent,
   startRouter,
   type RouteDef,
 } from '../../src/lib/stores/router.svelte'
@@ -14,9 +15,9 @@ import {
 const noopLoad = () => Promise.resolve({ default: null as unknown as Component })
 
 const defs: RouteDef[] = [
-  { pattern: '/', load: noopLoad },
-  { pattern: '/items/:id', load: noopLoad },
-  { pattern: '/items/:id/edit', load: noopLoad },
+  { pattern: '/', title: 'Root', load: noopLoad },
+  { pattern: '/items/:id', title: 'Item', load: noopLoad },
+  { pattern: '/items/:id/edit', title: 'Edit item', load: noopLoad },
 ]
 
 describe('router helpers', () => {
@@ -45,6 +46,20 @@ describe('router helpers', () => {
     expect(match?.params).toEqual({ id: 'a b' })
   })
 
+  it('still decodes a valid percent-sequence (%20)', () => {
+    const match = matchRoutes('/items/%20', defs)
+    expect(match?.params).toEqual({ id: ' ' })
+  })
+
+  it('does not throw on a malformed percent-sequence — keeps the raw param', () => {
+    // decodeURIComponent('%zz') throws URIError; safeDecode must fall back so a
+    // malformed deep link matches (with the raw segment) instead of hanging.
+    expect(() => matchRoutes('/items/%zz', defs)).not.toThrow()
+    const match = matchRoutes('/items/%zz', defs)
+    expect(match?.def.pattern).toBe('/items/:id')
+    expect(match?.params).toEqual({ id: '%zz' })
+  })
+
   it('returns null for an unmatched path (drives the 404 route)', () => {
     expect(matchRoutes('/nope/nope', defs)).toBeNull()
   })
@@ -67,5 +82,33 @@ describe('router navigation', () => {
     navigate('/login')
     history.back()
     await vi.waitFor(() => expect(currentPath()).toBe('/'))
+  })
+
+  it('sets a per-route document.title once the component resolves', async () => {
+    navigate('/login')
+    await vi.waitFor(() => expect(document.title).toBe('Sign in · Svelte UI Template'))
+    navigate('/')
+    await vi.waitFor(() => expect(document.title).toBe('Home · Svelte UI Template'))
+  })
+
+  it('sets the 404 title for an unmatched route', async () => {
+    navigate('/no/such/page')
+    await vi.waitFor(() => expect(document.title).toBe('404 — Not Found · Svelte UI Template'))
+  })
+
+  it('keeps the previous component rendered while the next route loads (stale-while-navigating)', async () => {
+    navigate('/login')
+    await vi.waitFor(() => expect(routeComponent()).not.toBeNull())
+    const previous = routeComponent()
+
+    // Kick off the next navigation. resolve() runs synchronously up to the lazy
+    // load's first await WITHOUT nulling `component`, so the old route is still
+    // rendered right now — no "Loading…" flash between routes.
+    navigate('/')
+    expect(routeComponent()).toBe(previous)
+
+    // Once the new chunk resolves, the component swaps atomically.
+    await vi.waitFor(() => expect(routeComponent()).not.toBe(previous))
+    expect(routeComponent()).not.toBeNull()
   })
 })

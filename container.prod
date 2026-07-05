@@ -16,9 +16,14 @@
 # LAN/homeserver: see the Caddyfile header for the `tls internal` swap.
 
 # --- build stage ------------------------------------------------------------
-FROM node:22-alpine AS build
+# Base images pinned by digest for reproducible, tamper-evident builds. The
+# comment above each FROM names the tag the digest resolved from; refresh both
+# together. (A Dockerfile FROM line can't carry an inline comment.)
+# tag: node:22-alpine
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS build
 
-RUN npm install -g pnpm@10
+# pnpm pinned to an exact version — keep in sync with package.json packageManager.
+RUN npm install -g pnpm@10.33.2
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml ./
@@ -28,7 +33,9 @@ COPY . .
 RUN pnpm build
 
 # --- serve stage ------------------------------------------------------------
-FROM caddy:2-alpine
+# Pinned by digest; the comment below names the tag. Refresh with the build stage.
+# tag: caddy:2-alpine
+FROM caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
 
 # The Caddyfile serves the SPA from $SITE_ROOT (with the history fallback) and
 # reverse-proxies /api,/auth,/health to $API_UPSTREAM.

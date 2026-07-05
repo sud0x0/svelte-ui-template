@@ -27,14 +27,33 @@ modules under `lib/` implement every rule below — copy them.
    design. Cite [draft-ietf-oauth-browser-based-apps](https://datatracker.ietf.org/doc/draft-ietf-oauth-browser-based-apps/)
    and [RFC 9700](https://www.rfc-editor.org/info/rfc9700).
 
+   **`return_to` is an open-redirect sink — the BFF MUST validate it.** The SPA
+   passes `?return_to=` through opaquely (it captures `location.pathname +
+location.search` and cannot be trusted to sanitise it), so the BFF's
+   `/auth/login` and `/auth/callback` MUST accept `return_to` **only** as a
+   same-site relative path: it MUST start with a single `/` and MUST be rejected
+   if it starts with `//` or `/\` (protocol-relative), contains a backslash, or
+   carries any scheme or authority (`https:`, `javascript:`, `user@host`, …). On
+   any failure, fall back to `/`. An unvalidated redirect target is an open
+   redirect ([OWASP Unvalidated Redirects & Forwards](https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html)).
+   See [auth-integration](../skills/auth-integration/SKILL.md).
+
 2. **CSRF defence in depth for the cookie session.** `SameSite=Strict` is
    necessary but, per the [OWASP CSRF Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)
    ("should not be the sole defence") and [MDN](https://developer.mozilla.org/en-US/docs/Web/Security/Practical_implementation_guides/CSRF_prevention)
    ("not a complete defense"), it must not be the only control. State-changing
    requests (`POST/PUT/PATCH/DELETE`) carry an additional control — a
-   double-submit `X-CSRF-Token` header (chosen) or Fetch-Metadata
-   (`Sec-Fetch-Site`) validation at the BFF. `lib/api/client.ts` attaches the
-   header on unsafe methods **today** (inert until the BFF sets the cookie).
+   double-submit `X-CSRF-Token` header (chosen). **The `csrf` cookie value the
+   BFF sets MUST be a session-bound HMAC token — the _signed_ double-submit
+   pattern, not a bare random value.** The naive double-submit cookie is still
+   forgeable via cookie injection from a sibling subdomain or a MITM, so the
+   OWASP CSRF Cheat Sheet says to "always prefer the Signed Double-Submit Cookie
+   pattern with session-bound HMAC tokens"; the BFF verifies the HMAC server-side.
+   Fetch-Metadata (`Sec-Fetch-Site`) validation with an Origin-header fallback is
+   the acceptable alternative control. Either way **the SPA is unchanged**:
+   `lib/api/client.ts` just echoes whatever `csrf` cookie the BFF set back in the
+   `X-CSRF-Token` header on unsafe methods **today** (inert until the BFF sets the
+   cookie) — it neither mints nor validates the token.
 
 3. **Never put session material in Web Storage.** No tokens or session
    identifiers in `localStorage`/`sessionStorage` ([OWASP HTML5 Storage](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html)).
@@ -67,7 +86,10 @@ modules under `lib/` implement every rule below — copy them.
    violation. Cite the [MDN CSP guide](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP).
 
 7. **Security headers at the edge.** The `Caddyfile` sets HSTS (long `max-age` +
-   `preload`, HTTPS-only), `X-Content-Type-Options: nosniff`, CSP with
+   `includeSubDomains`, HTTPS-only; `preload` is deliberately NOT set — it is a
+   hard-to-reverse operator opt-in that requires submission to the browser
+   preload list, so the domain owner appends it, not the template),
+   `X-Content-Type-Options: nosniff`, CSP with
    `frame-ancestors 'none'` **plus** `X-Frame-Options: DENY`, `Referrer-Policy:
 strict-origin-when-cross-origin`, `Permissions-Policy` locking
    geolocation/microphone/camera, `Cross-Origin-Opener-Policy: same-origin`, and

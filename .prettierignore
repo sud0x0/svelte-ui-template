@@ -3,7 +3,7 @@ dist
 coverage
 playwright-report
 pnpm-lock.yaml
-public/mockServiceWorker.js
+tests/public/mockServiceWorker.js
 CHANGELOG.md
 # Prettier has no shell parser.
 *.sh

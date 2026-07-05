@@ -25,7 +25,7 @@ VERSION ?= $(shell node -p "require('./package.json').version" 2>/dev/null || ec
 node_modules: package.json pnpm-lock.yaml
 	@echo "Installing local dependencies..."
 	@pnpm install
-	@pnpm exec msw init public --no-save >/dev/null 2>&1 || true
+	@pnpm exec msw init tests/public --no-save >/dev/null 2>&1 || true
 	@touch node_modules
 
 # ============================================================================
@@ -41,7 +41,7 @@ setup:
 		exit 1; \
 	fi
 	@pnpm install
-	@pnpm exec msw init public --no-save >/dev/null 2>&1 || true
+	@pnpm exec msw init tests/public --no-save >/dev/null 2>&1 || true
 	@pnpm exec playwright install chromium
 	@$(MAKE) pre-commit-install
 	@$(MAKE) build
@@ -60,7 +60,7 @@ pre-commit-install:
 
 install:
 	@pnpm install
-	@pnpm exec msw init public --no-save >/dev/null 2>&1 || true
+	@pnpm exec msw init tests/public --no-save >/dev/null 2>&1 || true
 
 build:
 	@echo "Building development container..."
@@ -214,9 +214,10 @@ csp-check: node_modules
 # Code quality
 # ============================================================================
 
-# Run ESLint on TypeScript + Svelte files.
+# Run ESLint on TypeScript + Svelte files. `--max-warnings 0` makes any warning
+# a hard failure, so the gate can never quietly accumulate warnings.
 lint: node_modules
-	@echo "==> eslint" && pnpm exec eslint .
+	@echo "==> eslint" && pnpm exec eslint . --max-warnings 0
 
 # Format all files with Prettier.
 fmt: node_modules
@@ -226,11 +227,12 @@ fmt: node_modules
 fmt-check: node_modules
 	@echo "==> prettier --check" && pnpm exec prettier --check .
 
-# Type-check the app (svelte-check) and the Node-context config (tsc).
+# Type-check the app (svelte-check), the Node-context config, and the E2E suite.
 check: node_modules
 	@echo "==> svelte-check + tsc"
 	@pnpm exec svelte-check --tsconfig ./tsconfig.app.json
 	@pnpm exec tsc -p tsconfig.node.json
+	@pnpm exec tsc -p tsconfig.e2e.json
 
 pre-commit-run: node_modules
 	@pre-commit run --all-files

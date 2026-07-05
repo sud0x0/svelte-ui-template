@@ -4,5 +4,6 @@ dist/
 coverage/
 playwright-report/
 test-results/
-# Generated MSW Service Worker (vendored, minified).
-public/mockServiceWorker.js
+# Generated MSW Service Worker (vendored, minified). Test-only — lives under
+# tests/public/, never the app's public/, so it is not shipped in the bundle.
+tests/public/mockServiceWorker.js

@@ -1,0 +1,12 @@
+{
+  // Type-checks the Playwright E2E suite, which nothing else covers:
+  // tsconfig.app.json EXCLUDES tests/e2e/**, and tsconfig.node.json does not
+  // include it. Without this, a type error in an E2E spec ships silently. Wired
+  // into `pnpm check`, `make check`, and the CI Type-check step.
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.e2e.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["tests/e2e/**/*.ts", "playwright.config.ts"]
+}

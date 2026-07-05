@@ -53,6 +53,19 @@ describe('api client', () => {
     expect(getToken).toBeNull()
   })
 
+  it('sets Content-Type: application/json for a string body', async () => {
+    let contentType: string | null = null
+    worker.use(
+      http.post('/api/json', ({ request }) => {
+        contentType = request.headers.get('Content-Type')
+        return new HttpResponse(null, { status: 204 })
+      })
+    )
+
+    await request('/api/json', { method: 'POST', body: JSON.stringify({ a: 1 }) })
+    expect(contentType).toBe('application/json')
+  })
+
   it('maps a non-OK JSON body to the typed ApiError envelope', async () => {
     worker.use(
       http.get('/api/boom', () =>

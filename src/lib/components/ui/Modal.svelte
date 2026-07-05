@@ -10,6 +10,13 @@
 
   let { open, title, onclose, children }: Props = $props()
 
+  // Unique per-instance id so two modals on one page don't share `modal-title`
+  // (a duplicate id breaks aria-labelledby — the AT would resolve the wrong
+  // heading). $props.id() is Svelte's stable, SSR-safe per-instance id; it must
+  // be a direct variable-declaration initializer, hence the separate derive.
+  const uid = $props.id()
+  const titleId = `${uid}-title`
+
   let dialog = $state<HTMLDialogElement>()
 
   // Drive the native <dialog> from the `open` prop. <dialog> has its own
@@ -37,14 +44,14 @@
 <dialog
   bind:this={dialog}
   class="modal"
-  aria-labelledby={title ? 'modal-title' : undefined}
+  aria-labelledby={title ? titleId : undefined}
   onclose={handleClose}
   onclick={handleBackdropClick}
 >
   <div class="modal-content">
     {#if title}
       <header class="modal-header">
-        <h2 id="modal-title">{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         {#if onclose}
           <button type="button" class="modal-close" onclick={onclose} aria-label="Close">
             &times;

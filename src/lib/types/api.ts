@@ -51,25 +51,32 @@ export function isApiError(value: unknown): value is ApiError {
 
 /** Narrows a parsed `/health` body, throwing if it does not match the contract. */
 export function assertHealthResponse(value: unknown): HealthResponse {
-  if (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as Record<string, unknown>).status === 'string'
-  ) {
-    return value as HealthResponse
+  if (typeof value === 'object' && value !== null) {
+    const v = value as Record<string, unknown>
+    // `version` is optional, but if present it MUST be a string — a present-but-
+    // non-string version is a malformed response, not a silently-accepted one.
+    if (
+      typeof v.status === 'string' &&
+      (v.version === undefined || typeof v.version === 'string')
+    ) {
+      return value as HealthResponse
+    }
   }
   throw new Error('Malformed HealthResponse')
 }
 
 /** Narrows a parsed `/auth/me` body, throwing if it does not match the contract. */
 export function assertCurrentUser(value: unknown): CurrentUser {
-  if (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as Record<string, unknown>).id === 'string' &&
-    typeof (value as Record<string, unknown>).displayName === 'string'
-  ) {
-    return value as CurrentUser
+  if (typeof value === 'object' && value !== null) {
+    const v = value as Record<string, unknown>
+    // `roles` is optional, but if present it MUST be an array of strings — a
+    // present-but-invalid roles field is a malformed response.
+    const rolesOk =
+      v.roles === undefined ||
+      (Array.isArray(v.roles) && v.roles.every((r) => typeof r === 'string'))
+    if (typeof v.id === 'string' && typeof v.displayName === 'string' && rolesOk) {
+      return value as CurrentUser
+    }
   }
   throw new Error('Malformed CurrentUser')
 }
