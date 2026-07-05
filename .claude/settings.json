@@ -17,7 +17,7 @@
       "Bash(node scripts/*)",
       "Bash(podman ps *)",
       "Bash(podman logs *)",
-      "Bash(pre-commit run *)",
+      "Bash(pre-commit run *)"
     ],
     "deny": [
       "Edit(.claude/settings.json)",
