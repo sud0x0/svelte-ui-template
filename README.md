@@ -1,6 +1,8 @@
 # svelte-ui-template
 
-A production-ready **Svelte 5 (runes) single-page-app** template — _not_
+> Please note that this project is still under development.
+
+A **Svelte 5 (runes) single-page-app** template — _not_
 SvelteKit. It is the front-end counterpart to
 [go-api-template](https://github.com/sud0x0/go-api-template) and is built to give
 the same first-class LLM-assisted coding experience: a `.claude/` system of rules
