@@ -17,7 +17,15 @@
       "Bash(node scripts/*)",
       "Bash(podman ps *)",
       "Bash(podman logs *)",
-      "Bash(pre-commit run *)"
+      "Bash(pre-commit run *)",
+      "Bash(sh ./scripts/extract-changelog.sh --allow-empty Unreleased CHANGELOG.md)",
+      "Bash(echo \"with --allow-empty: exit $?\")",
+      "Bash(sh ./scripts/extract-changelog.sh Unreleased CHANGELOG.md)",
+      "Bash(echo \"without flag: exit $?\")",
+      "Bash(node -p \"JSON.stringify\\(require\\('./package.json'\\).devDependencies, null, 2\\)\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=Object.keys\\(JSON.parse\\(d\\).rules||{}\\);console.log\\('svelte/* rules:',r.filter\\(x=>x.startsWith\\('svelte/'\\)\\).length\\);console.log\\('@typescript-eslint/* rules:',r.filter\\(x=>x.startsWith\\('@typescript-eslint/'\\)\\).length\\);console.log\\('total:',r.length\\)}\\)\")",
+      "Bash(node -p \"Object.keys\\(require\\('./package.json'\\).devDependencies\\).join\\('\\\\n'\\)\")",
+      "Bash(node -p \"require\\('./package.json'\\).scripts.lint\")"
     ],
     "deny": [
       "Edit(.claude/settings.json)",

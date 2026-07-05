@@ -102,8 +102,7 @@ rejects other formats, and agents must not add one.
 "Generated with Claude Code" footers — authorship stays with the repository owner.
 Enforced for the trailer via `"attribution": { "commit": "", "pr": "" }` in
 [`.claude/settings.json`](.claude/settings.json) (empty strings hide all commit/PR
-attribution — the current mechanism; the older `"includeCoAuthoredBy"` key is no
-longer documented); the footer is governed by this rule.
+attribution — the current mechanism; the older `"includeCoAuthoredBy"` key is deprecated in favour of attribution); the footer is governed by this rule.
 
 ## Skills
 

@@ -140,11 +140,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The release body is the CHANGELOG section; confirm the script can extract
-      # content from the current changelog (the [Unreleased] section is always
-      # present in the template). A real tag extracts `## [X.Y.Z]` instead.
+      # Assert only that the `## [Unreleased]` section EXISTS and parses — NOT
+      # that it is non-empty. Right after a release cut the section is
+      # legitimately empty (it is empty now, deliberately), so `--allow-empty`
+      # skips the emptiness rejection here. Non-emptiness is enforced only on the
+      # release path (release.yml + `make changelog-check`, both flagless), where
+      # a real tag extracts `## [X.Y.Z]` and an empty section must abort the tag.
       - name: CHANGELOG is extractable
-        run: sh ./scripts/extract-changelog.sh Unreleased CHANGELOG.md > /dev/null
+        run: sh ./scripts/extract-changelog.sh --allow-empty Unreleased CHANGELOG.md > /dev/null
 
       # Assemble the release tarball exactly as `make prod-bundle` does, so a
       # broken build or packaging step fails here, not at tag time.

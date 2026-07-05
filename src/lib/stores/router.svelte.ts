@@ -204,9 +204,9 @@ async function resolve(to: string, kind: NavKind = 'push'): Promise<void> {
       params = nextParams
       guarded = nextGuarded
       notFound = nextNotFound
-      // Read via isNotFound() (now that `notFound` is set) — the 404 route drives
-      // the 404 title; otherwise the matched route's title.
-      document.title = `${isNotFound() ? '404 — Not Found' : def.title} · ${APP_NAME}`
+      // `def` IS NOT_FOUND on the 404 path (its title is "404 — Not Found"), so
+      // `def.title` alone is correct for every route — no 404 special-case needed.
+      document.title = `${def.title} · ${APP_NAME}`
       applyNavFocus(kind)
     }
   } catch (error) {

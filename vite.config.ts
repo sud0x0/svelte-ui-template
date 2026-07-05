@@ -8,7 +8,7 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 //
 // The config MUST be the functional form + loadEnv: Vite does NOT inject `.env*`
 // values into `process.env` while the config file itself is evaluated
-// (https://vite.dev/config/#async-config), so a bare `process.env.VITE_API_TARGET`
+// (https://vite.dev/config/#using-environment-variables-in-config), so a bare `process.env.VITE_API_TARGET`
 // silently ignores the `.env` the README tells you to edit. `loadEnv` reads the
 // `.env*` files AND layers the real process env on top (with prefix ''), so the
 // container/compose path — which sets VITE_API_TARGET as a real env var — keeps

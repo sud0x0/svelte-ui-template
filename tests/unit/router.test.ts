@@ -7,6 +7,7 @@ import {
   navigate,
   currentPath,
   routeComponent,
+  isNotFound,
   startRouter,
   type RouteDef,
 } from '../../src/lib/stores/router.svelte'
@@ -94,6 +95,14 @@ describe('router navigation', () => {
   it('sets the 404 title for an unmatched route', async () => {
     navigate('/no/such/page')
     await vi.waitFor(() => expect(document.title).toBe('404 — Not Found · Svelte UI Template'))
+  })
+
+  it('isNotFound() reflects whether the resolved route matched', async () => {
+    // The flag flips in the atomic swap when the lazy load resolves, so wait.
+    navigate('/no/such/page')
+    await vi.waitFor(() => expect(isNotFound()).toBe(true))
+    navigate('/login')
+    await vi.waitFor(() => expect(isNotFound()).toBe(false))
   })
 
   it('keeps the previous component rendered while the next route loads (stale-while-navigating)', async () => {
