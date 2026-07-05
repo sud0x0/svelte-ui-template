@@ -19,15 +19,15 @@ jobs:
       hashes: ${{ steps.subjects.outputs.hashes }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
 
       # No `version:` — read from package.json's `packageManager` field.
       # Specifying both errors with ERR_PNPM_BAD_PM_VERSION.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 22
           cache: pnpm
@@ -82,7 +82,7 @@ jobs:
       # SBOM of the dependency closure. Scan the project (package.json + lockfile)
       # so syft attributes every JS package shipped in the bundle.
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@v0.22.0
+        uses: anchore/sbom-action/download-syft@62ad5284b8ced813296287a0b63906cb364b73ee # v0.22.0
 
       - name: Generate SBOM
         env:
@@ -122,7 +122,7 @@ jobs:
       # run-the-site instructions live in the README's "Releases" section, so
       # the body stays exactly what the maintainer wrote.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           body_path: /tmp/release-notes.md
@@ -139,6 +139,9 @@ jobs:
       actions: read
       id-token: write
       contents: write
+    # NOT SHA-pinned by design: the SLSA generator must be called by a semantic
+    # version tag — it verifies its own ref at runtime and refuses to run from a
+    # commit SHA. Matches go-api-template; the only unpinned `uses:` in the repo.
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: ${{ needs.release.outputs.hashes }}

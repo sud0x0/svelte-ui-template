@@ -54,6 +54,16 @@ never imply it passed.
 
 ## Always-apply rules
 
+- **Never commit — the owner commits, agents never do.** Agents MUST NOT run
+  `git commit`, `git tag`, or `git push`. This is non-negotiable and is not
+  waived by any task instruction. Leave every change uncommitted in the working
+  tree for the repository owner to review and commit. In place of committing,
+  **propose a [Conventional Commit](#commit-messages) message per logical change
+  in your report** (one per logical change when several are in flight). The
+  `Bash(git commit*)` / `Bash(git tag*)` / `Bash(git push*)` entries in the deny
+  list of [`.claude/settings.json`](.claude/settings.json) make this mechanical
+  as well as documented (that file is itself deny-protected from agent edits by
+  design).
 - **Run the verification loop and fix failures before moving on.** `make ci`
   must be green after every change; run the full `make verify` (`ci` + e2e)
   before a commit. When Playwright browsers are unavailable, run the no-browser
@@ -72,6 +82,10 @@ never imply it passed.
 
 ## Commit messages
 
+Agents never commit (see the never-commit rule above); this convention is what
+the repository **owner** follows, and what agents use when **proposing** a commit
+message in their report — never to run `git commit` themselves.
+
 Follow [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
 `type(scope): summary`. Types: `feat`, `fix`, `build`, `ci`, `docs`, `test`,
 `perf`, `refactor`, `chore`. Examples:
@@ -85,8 +99,11 @@ This is **requested, not enforced** — there is no commit-msg hook or CI gate t
 rejects other formats, and agents must not add one.
 
 **Attribution:** commits must **not** carry `Co-Authored-By: Claude …` trailers or
-"Generated with Claude Code" footers. Enforced via `"includeCoAuthoredBy": false`
-in [`.claude/settings.json`](.claude/settings.json).
+"Generated with Claude Code" footers — authorship stays with the repository owner.
+Enforced for the trailer via `"attribution": { "commit": "", "pr": "" }` in
+[`.claude/settings.json`](.claude/settings.json) (empty strings hide all commit/PR
+attribution — the current mechanism; the older `"includeCoAuthoredBy"` key is no
+longer documented); the footer is governed by this rule.
 
 ## Skills
 
@@ -101,6 +118,19 @@ in [`.claude/settings.json`](.claude/settings.json).
 - `/architecture-review` — check layering, runes-in-`.svelte.ts`, code splitting,
   the auth seam; read `decisions.md` first.
 - `/performance-review` — measure bundle size against the budget before changing.
+- `/write-unit-tests` — write tests in the repo's discipline: Vitest Browser Mode
+  with `vitest-browser-svelte`, MSW at the API boundary, harness fixtures, a
+  tripwire per guarded invariant. Keeps the documented v8 coverage threshold
+  (decisions.md).
+- `/write-comments` — comments as load-bearing context (stale comments are bugs):
+  why-not-what, evidence comments, `decisions.md` citations, the `TODO(auth):`
+  seam marker, the same-change rule, `TODO(scope): … — <pointer>`.
+- `/write-readme` — write README top sections a newcomer can follow: plain
+  language, orientation-not-reference, checkable rules (≤3-sentence intro,
+  copy-paste-verified quickstart, allowlist-filtered acronym grep, read-aloud pass).
+- `/twelve-factor-audit` — audit the SPA against the [12-factor](https://12factor.net/)
+  methodology with file-cited, per-factor verdicts, adapted for a static
+  build-and-serve frontend (Vite build → tarball → Caddy).
 
 ## Releases
 

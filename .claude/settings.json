@@ -1,5 +1,8 @@
 {
-  "includeCoAuthoredBy": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
   "permissions": {
     "allow": [
       "Bash(make *)",
@@ -14,6 +17,15 @@
       "Bash(node scripts/*)",
       "Bash(podman ps *)",
       "Bash(podman logs *)"
+    ],
+    "deny": [
+      "Edit(.claude/settings.json)",
+      "Write(.claude/settings.json)",
+      "Edit(.claude/settings.local.json)",
+      "Write(.claude/settings.local.json)",
+      "Bash(git commit*)",
+      "Bash(git tag*)",
+      "Bash(git push*)"
     ]
   }
 }

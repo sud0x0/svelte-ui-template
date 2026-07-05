@@ -2,10 +2,17 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # asvs-5.0.0.txt is a generated, licensed artifact (a verbatim rendering of
+      # the official ASVS CSV). Exclude it from the whitespace-rewriting hooks so
+      # they don't mutate it — it stays reproducible from a fresh extraction.
+      # gitleaks and check-added-large-files still scan it.
       - id: trailing-whitespace
+        exclude: '^\.claude/skills/security-review/references/asvs-5\.0\.0\.txt$'
       - id: end-of-file-fixer
+        exclude: '^\.claude/skills/security-review/references/asvs-5\.0\.0\.txt$'
       - id: check-yaml
       - id: check-added-large-files
+      - id: check-merge-conflict
 
   # NOTE: Conventional Commits are *requested, not enforced* (see CLAUDE.md) —
   # there is deliberately no commit-msg hook, matching go-api-template's stance.
@@ -48,11 +55,33 @@ repos:
         files: \.(ts|svelte)$
         pass_filenames: false
 
+      # Dependency-vulnerability gate, scoped to lockfile changes (mirrors how
+      # go-api-template scopes govulncheck to go.mod/go.sum). Fails on high or
+      # critical CVEs in the production dependency tree.
+      - id: pnpm-audit
+        name: pnpm-audit
+        entry: pnpm audit --prod --audit-level high
+        language: system
+        files: pnpm-lock\.yaml$
+        pass_filenames: false
+
   - repo: https://github.com/semgrep/pre-commit
-    rev: v1.156.0
+    rev: v1.165.0
     hooks:
       - id: semgrep
         args:
-          - --config=auto
+          # Pinned rulesets instead of --config=auto. `auto` pulls whatever the
+          # semgrep registry serves at scan time, so a passing pipeline can
+          # start failing with no code change when upstream adds rules. These
+          # named configs cover this repo's surface (TypeScript + JavaScript +
+          # GitHub Actions) and only run rules we've chosen, so the rule set no
+          # longer drifts. Keep in sync with the `semgrep` target in the Makefile.
+          - --config=p/typescript
+          - --config=p/javascript
+          - --config=p/github-actions
+          # These two supply-chain rules are NOT in p/github-actions; pin them
+          # explicitly so we keep enforcing SHA-pinned actions and no curl|sh.
+          - --config=r/yaml.github-actions.security.github-actions-mutable-action-tag
+          - --config=r/yaml.github-actions.security.gha-curl-pipe-shell
           - --error
           - --skip-unknown-extensions

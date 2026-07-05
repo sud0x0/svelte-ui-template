@@ -5,11 +5,24 @@ description: Security-review a change, PR, or the working tree in this svelte-ui
 
 # /security-review — review a change against the front-end rules
 
-The security model is in [`security.md`](../../rules/security.md) (source of
-truth); the reference modules under `src/lib/` demonstrate it. Take a diff or the
-working tree and check it against that model, then run the scanners. **Cite
-evidence for every verdict** — a `file:line`, a grep result, or a scanner line.
-"Looks fine" is not a verdict.
+Two documents drive the review:
+
+- **Write-time rule set:** [`security.md`](../../rules/security.md) — the ten
+  rules (source of truth), demonstrated by the reference modules under `src/lib/`.
+- **Verification map:** [`references/asvs-map.md`](references/asvs-map.md) — the
+  front-end-applicable OWASP **ASVS 5.0.0 (Level 2)** requirements, each mapped to
+  the repo control that satisfies it and the test that proves it, built by reading
+  the committed standard ([`references/asvs-5.0.0.txt`](references/asvs-5.0.0.txt)).
+
+Take a diff or the working tree, check it against the rules, walk the ASVS
+requirements the change touches, then run the scanners. **Cite evidence for every
+verdict** — a `file:line`, a grep result, or a scanner line — and, where it
+applies, the **ASVS requirement ID** (reference form: `V<n>` for a chapter,
+`<n>.<section>.<index>` for a requirement). "Looks fine" is not a verdict.
+
+**Keep the map current.** Any change that touches a mapped area updates its
+`asvs-map.md` rows **and their test evidence in the same change** — a stale row,
+or a `met` row with no named test, is a bug (the map's own maintenance rule).
 
 ## Inputs
 

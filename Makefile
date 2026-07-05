@@ -17,7 +17,7 @@ VERSION ?= $(shell node -p "require('./package.json').version" 2>/dev/null || ec
         ci verify \
         lint fmt fmt-check check \
         test test-unit test-e2e test-coverage test-scripts size csp-check \
-        pre-commit-install pre-commit-run semgrep socket help
+        pre-commit-install pre-commit-run audit semgrep socket help
 
 # `node_modules` is a real-file target: any rule depending on it triggers
 # `pnpm install` once (or after `make clean`), then refreshes when the lockfile
@@ -55,7 +55,7 @@ pre-commit-install:
 	@echo "Pre-commit hooks installed."
 
 # ============================================================================
-# Development (containerised)
+# Development
 # ============================================================================
 
 install:
@@ -88,6 +88,63 @@ clean:
 	@rm -rf $(PROJECT)-*/ $(PROJECT)-*.tar.gz
 	@rm -f *.sbom.json checksums.txt
 	@echo "Clean complete."
+
+# ============================================================================
+# Release
+# ============================================================================
+
+# Reproduce the release bundle locally (static assets + Caddyfile, flat layout).
+prod-bundle: node_modules
+	@echo "Building static bundle for v$(VERSION)..."
+	@pnpm install --frozen-lockfile
+	@pnpm exec svelte-check --tsconfig ./tsconfig.app.json
+	@pnpm build
+	@STAGE=$(PROJECT)-$(VERSION); \
+	rm -rf "$$STAGE" "$$STAGE.tar.gz"; \
+	mkdir -p "$$STAGE"; \
+	cp -R dist/. "$$STAGE/"; \
+	cp Caddyfile "$$STAGE/"; \
+	tar -czf "$$STAGE.tar.gz" "$$STAGE"; \
+	rm -rf "$$STAGE"; \
+	echo ""; \
+	echo "Bundle: $$STAGE.tar.gz"
+
+# Build the production container image (Caddy serving the static bundle) — an
+# alternative to the tarball for image-based deploys. Tags <project>:<version>.
+# See container.prod for the run command + required env.
+prod-image:
+	@echo "Building production image $(PROJECT):$(VERSION)..."
+	@podman build -f container.prod -t $(PROJECT):$(VERSION) .
+	@echo ""
+	@echo "Built $(PROJECT):$(VERSION). Run with SITE_ADDRESS/API_UPSTREAM/ACME_EMAIL — see container.prod."
+
+# Validate the release pipeline end-to-end (build -> tarball -> SBOM ->
+# checksums). Mirrors .github/workflows/release.yml. Requires syft.
+release-check:
+	@command -v syft >/dev/null 2>&1 || { \
+		echo "syft not found. Install: https://github.com/anchore/syft#installation"; exit 1; }
+	@$(MAKE) prod-bundle VERSION=$(VERSION)
+	@echo "==> Generating SBOM..."
+	@syft scan dir:. --source-name "$(PROJECT)" --source-version "$(VERSION)" \
+		-o spdx-json=$(PROJECT)-$(VERSION).sbom.json
+	@echo "==> Computing checksums..."
+	@sha256sum $(PROJECT)-$(VERSION).tar.gz $(PROJECT)-$(VERSION).sbom.json > checksums.txt
+	@cat checksums.txt
+	@echo ""
+	@echo "release-check passed. Safe to push a release tag."
+
+# Verify CHANGELOG.md has a non-empty section for a given version BEFORE tagging.
+# Usage: make changelog-check VERSION=1.2.3 (no leading v). The Makefile's
+# VERSION default comes from package.json (origin = file), so we reject that and
+# require the operator to pass VERSION explicitly — the release notes are sourced
+# from this section, so a typo'd version must not silently pass.
+changelog-check:
+	@case "$(origin VERSION)" in \
+		"command line"|"environment"|"environment override"|"override") ;; \
+		*) echo "usage: make changelog-check VERSION=x.y.z" >&2; exit 2 ;; \
+	esac
+	@sh ./scripts/extract-changelog.sh "$(VERSION)" >/dev/null && \
+		echo "CHANGELOG.md has a non-empty [$(VERSION)] section."
 
 # ============================================================================
 # Testing
@@ -175,72 +232,26 @@ check: node_modules
 	@pnpm exec svelte-check --tsconfig ./tsconfig.app.json
 	@pnpm exec tsc -p tsconfig.node.json
 
-# ============================================================================
-# Production bundle + release
-# ============================================================================
-
-# Reproduce the release bundle locally (static assets + Caddyfile, flat layout).
-prod-bundle: node_modules
-	@echo "Building static bundle for v$(VERSION)..."
-	@pnpm install --frozen-lockfile
-	@pnpm exec svelte-check --tsconfig ./tsconfig.app.json
-	@pnpm build
-	@STAGE=$(PROJECT)-$(VERSION); \
-	rm -rf "$$STAGE" "$$STAGE.tar.gz"; \
-	mkdir -p "$$STAGE"; \
-	cp -R dist/. "$$STAGE/"; \
-	cp Caddyfile "$$STAGE/"; \
-	tar -czf "$$STAGE.tar.gz" "$$STAGE"; \
-	rm -rf "$$STAGE"; \
-	echo ""; \
-	echo "Bundle: $$STAGE.tar.gz"
-
-# Build the production container image (Caddy serving the static bundle) — an
-# alternative to the tarball for image-based deploys. Tags <project>:<version>.
-# See container.prod for the run command + required env.
-prod-image:
-	@echo "Building production image $(PROJECT):$(VERSION)..."
-	@podman build -f container.prod -t $(PROJECT):$(VERSION) .
-	@echo ""
-	@echo "Built $(PROJECT):$(VERSION). Run with SITE_ADDRESS/API_UPSTREAM/ACME_EMAIL — see container.prod."
-
-# Validate the release pipeline end-to-end (build -> tarball -> SBOM ->
-# checksums). Mirrors .github/workflows/release.yml. Requires syft.
-release-check:
-	@command -v syft >/dev/null 2>&1 || { \
-		echo "syft not found. Install: https://github.com/anchore/syft#installation"; exit 1; }
-	@$(MAKE) prod-bundle VERSION=$(VERSION)
-	@echo "==> Generating SBOM..."
-	@syft scan dir:. --source-name "$(PROJECT)" --source-version "$(VERSION)" \
-		-o spdx-json=$(PROJECT)-$(VERSION).sbom.json
-	@echo "==> Computing checksums..."
-	@sha256sum $(PROJECT)-$(VERSION).tar.gz $(PROJECT)-$(VERSION).sbom.json > checksums.txt
-	@cat checksums.txt
-	@echo ""
-	@echo "release-check passed. Safe to push a release tag."
-
-# Verify CHANGELOG.md has a non-empty section for a given version BEFORE tagging.
-# Usage: make changelog-check VERSION=1.2.3 (no leading v). The Makefile's
-# VERSION default comes from package.json (origin = file), so we reject that and
-# require the operator to pass VERSION explicitly — the release notes are sourced
-# from this section, so a typo'd version must not silently pass.
-changelog-check:
-	@case "$(origin VERSION)" in \
-		"command line"|"environment"|"environment override"|"override") ;; \
-		*) echo "usage: make changelog-check VERSION=x.y.z" >&2; exit 2 ;; \
-	esac
-	@sh ./scripts/extract-changelog.sh "$(VERSION)" >/dev/null && \
-		echo "CHANGELOG.md has a non-empty [$(VERSION)] section."
-
-# ============================================================================
-# Security scanners
-# ============================================================================
-
 pre-commit-run: node_modules
 	@pre-commit run --all-files
 
+# Fail on high/critical CVEs in the PRODUCTION dependency tree (`--prod` scopes
+# out devDependencies — the shipped bundle is what matters). The template ships
+# zero runtime deps, so this is a floor that stays green until one is added.
+audit:
+	@echo "==> pnpm audit (prod, high+)" && pnpm audit --prod --audit-level high
+
+# Run semgrep with pinned rulesets, not --config=auto: `auto` fetches whatever
+# the registry serves at scan time, so a passing run can start failing on an
+# upstream rule change. The named configs cover this repo's surface (TypeScript
+# + JavaScript + GitHub Actions). The two r/ rules (SHA-pinned actions, no
+# curl|sh) are not in p/github-actions and are pinned explicitly. Keep in sync
+# with the semgrep hook args in .pre-commit-config.yaml.
 semgrep:
-	@semgrep --config=auto --error --skip-unknown-extensions .
+	@semgrep --config=p/typescript --config=p/javascript --config=p/github-actions \
+		--config=r/yaml.github-actions.security.github-actions-mutable-action-tag \
+		--config=r/yaml.github-actions.security.gha-curl-pipe-shell \
+		--error --skip-unknown-extensions .
 
 socket:
 	@socket scan create .
@@ -262,6 +273,13 @@ help:
 	@echo "  destroy          Destroy all containers, volumes, and images"
 	@echo "  clean            Delete all build, test, and release artefacts"
 	@echo ""
+	@echo "Release"
+	@echo "-------"
+	@echo "  prod-bundle      Build the release tarball locally (static bundle + Caddyfile)"
+	@echo "  prod-image       Build the production container image (Caddy serving dist/)"
+	@echo "  release-check    Build + SBOM (syft) + checksums; run before tagging"
+	@echo "  changelog-check  Confirm CHANGELOG has a non-empty section (VERSION=x.y.z)"
+	@echo ""
 	@echo "Testing"
 	@echo "-------"
 	@echo "  ci               Everyday gate (needs chromium): lint + format + types + unit + build + size"
@@ -281,15 +299,9 @@ help:
 	@echo "  fmt-check        Check formatting without writing"
 	@echo "  check            Type-check: svelte-check + tsc (node config)"
 	@echo "  pre-commit-run   Run all pre-commit hooks against all files"
+	@echo "  audit            Fail on high/critical CVEs in prod dependencies (pnpm audit)"
 	@echo "  semgrep          Run semgrep security scan"
 	@echo "  socket           Run Socket.dev supply-chain scan"
-	@echo ""
-	@echo "Release"
-	@echo "-------"
-	@echo "  prod-bundle      Build the release tarball locally (static bundle + Caddyfile)"
-	@echo "  prod-image       Build the production container image (Caddy serving dist/)"
-	@echo "  release-check    Build + SBOM (syft) + checksums; run before tagging"
-	@echo "  changelog-check  Confirm CHANGELOG has a non-empty section (VERSION=x.y.z)"
 	@echo ""
 	@echo "Typical workflow"
 	@echo "----------------"

@@ -3,10 +3,15 @@ title = "gitleaks config"
 [extend]
 useDefault = true
 
+# RULE: machine-writable directories are NEVER directory-allowlisted. The
+# `.claude/` tree (settings.json, skills, rules) receives machine-written
+# content — the harness can auto-append session content into settings.json — so
+# it is the directory that needs scanning most, not least. Never add a
+# '''\.claude/''' entry to the paths below; allowlist a PRECISE pattern/file
+# with a reason instead, or rewrite the example content so the scanner does not
+# flag it.
 [allowlist]
 description = "Global allowlist"
-# NOTE: `.claude/` is deliberately NOT allowlisted — secrets must never live in
-# the agent rules/skills either, so gitleaks scans them too.
 paths = [
     '''pnpm-lock\.yaml$''',
     '''\.gitleaks\.toml$''',
