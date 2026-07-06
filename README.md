@@ -54,28 +54,31 @@ are reusable; `lib/utils/*` are pure. No route imports `fetch`.
 ```
 .
 ├── .claude/                    # agent rules + skills (committed — part of the product)
-│   ├── settings.json           # includeCoAuthoredBy:false + durable allow-list
+│   ├── settings.json           # attribution disabled + scoped allow-list + deny list
 │   ├── rules/{security.md, decisions.md}
 │   └── skills/{new-component, new-route, new-api-resource, auth-integration,
-│               security-review, architecture-review, performance-review}/SKILL.md
+│               security-review, architecture-review, performance-review,
+│               twelve-factor-audit, write-comments, write-readme,
+│               write-unit-tests}/SKILL.md
 ├── .github/workflows/{ci.yml, release.yml}
 ├── .devcontainer/devcontainer.json
-├── public/{favicon.svg, icons.svg, mockServiceWorker.js (generated)}
+├── public/{favicon.svg, icons.svg}
 ├── src/
 │   ├── App.svelte              # root: nav + router outlet + guard + theme + error boundary
 │   ├── main.ts                 # mount
 │   ├── app.css                 # theming via CSS variables
-│   ├── config.ts               # the ONE place that reads import.meta.env
 │   ├── vite-env.d.ts
 │   ├── lib/
+│   │   ├── config.ts           # the ONE place that reads import.meta.env
 │   │   ├── api/{client.ts, auth.ts, health.ts}
 │   │   ├── stores/{auth.svelte.ts, router.svelte.ts, preferences.svelte.ts}
 │   │   ├── components/{ui/Modal.svelte, auth/RouteGuard.svelte}
 │   │   ├── types/api.ts        # the API contract + boundary guards
 │   │   └── utils/errors.ts
 │   └── routes/                 # Home.svelte (guarded), Login.svelte, NotFound.svelte
-├── tests/{unit, e2e, mocks}
-├── scripts/{check-bundle-size.mjs, check-csp.mjs}
+├── tests/{unit, e2e, mocks, public/mockServiceWorker.js (generated)}
+├── scripts/{check-bundle-size.mjs, check-csp.mjs, extract-changelog.sh,
+│            extract-changelog.test.mjs}
 ├── Caddyfile                   # reference production host (in the release tarball)
 ├── compose.dev.yaml + container.dev + container.prod
 ├── Makefile · CLAUDE.md · CHANGELOG.md · README.md · LICENSE
@@ -108,7 +111,7 @@ flow). For the browser-based tests, Playwright's chromium.
 
 ```bash
 # 1. Install dependencies + generate the MSW worker.
-make install                    # or: pnpm install && pnpm exec msw init public --no-save
+make install                    # or: pnpm install && pnpm exec msw init tests/public --no-save
 
 # 2. Install the test browser (once).
 pnpm exec playwright install chromium
@@ -390,8 +393,11 @@ This is **requested, not enforced** — there is no commit-msg hook or CI gate t
 rejects other formats (matching go-api-template), and agents must not add one.
 
 **Attribution:** commits must **not** carry `Co-Authored-By: Claude …` trailers or
-"Generated with Claude Code" footers. The trailer is disabled via
-`"includeCoAuthoredBy": false` in [`.claude/settings.json`](.claude/settings.json).
+"Generated with Claude Code" footers. The trailer is disabled via the
+`"attribution": { "commit": "", "pr": "" }` setting in
+[`.claude/settings.json`](.claude/settings.json) (empty strings hide all
+commit/PR attribution); the older `"includeCoAuthoredBy"` key is deprecated in
+favour of it.
 
 ## Makefile reference
 

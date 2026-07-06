@@ -27,7 +27,10 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       strictPort: true,
-      host: '0.0.0.0',
+      // No `host` here: bare-metal `pnpm dev` stays localhost-only so the
+      // unauthenticated dev server (and its backend proxy) is never exposed on
+      // every interface. The container dev flow passes `--host 0.0.0.0` in
+      // compose.dev.yaml, and a CLI flag overrides config.
       proxy: {
         '/api': proxy,
         '/auth': proxy,

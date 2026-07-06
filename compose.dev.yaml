@@ -15,7 +15,10 @@ services:
     ports:
       - '3000:3000'
     environment:
-      VITE_API_TARGET: ${VITE_API_TARGET}
+      # Fallback so a bare .env (no VITE_API_TARGET) still reaches the host's
+      # backend: without it the in-container proxy would default to
+      # localhost:8080 inside the container's own netns. Matches .env.example.
+      VITE_API_TARGET: ${VITE_API_TARGET:-http://host.containers.internal:8080}
       VITE_AUTH_MODE: ${VITE_AUTH_MODE:-disabled}
     command: pnpm dev --host 0.0.0.0
 

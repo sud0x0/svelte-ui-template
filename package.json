@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Production-ready Svelte 5 (runes) SPA template with a token-free OIDC/BFF auth seam — front-end counterpart to go-api-template.",
+  "description": "Svelte 5 (runes) SPA template with a token-free OIDC/BFF auth seam — front-end counterpart to go-api-template.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -47,5 +47,8 @@
       "tests/public"
     ]
   },
-  "packageManager": "pnpm@10.33.2"
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=22"
+  }
 }
