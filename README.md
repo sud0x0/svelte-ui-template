@@ -9,15 +9,18 @@ the same first-class LLM-assisted coding experience: a `.claude/` system of rule
 and skills, a single verification loop, bounded agent permissions, a real test
 layer, and a documented, secure, efficient architecture.
 
-This template ships **stack, tooling, a test harness, and an auth seam — not
-features.** There is exactly one tiny reference feature (a `/health` call plus the
-auth-seam demo). No tasks, categories, or charts.
+This template ships **stack, tooling, a test harness, and a real auth model — not
+features.** There is one tiny reference feature (a `/health` call plus an
+authenticated "Recent logs" list). No tasks, categories, or charts.
 
-> **Authentication is intentionally NOT implemented.** Exactly like the Go
-> template, this SPA ships the auth **seam/contract**, not a working login. The
-> intended future model is OpenID Connect via a **Backend-For-Frontend (BFF)**
-> where the Go API holds the tokens and the SPA holds none. Flipping it on is one
-> config flag plus filling a few clearly-marked stubs. See
+> **Authentication is implemented — as a token-free Backend-for-Frontend (BFF).**
+> The SPA holds **no tokens of any kind**. A small confidential-client OIDC
+> service (`bff/`) logs the user in with Authorization Code + PKCE, keeps every
+> token server-side, gives the browser only a `__Host-` session cookie, and
+> proxies `/api/*` to [go-api-template](https://github.com/sud0x0/go-api-template)
+> with the access token attached. This is the top-ranked architecture of the
+> IETF's browser-apps Best Current Practice. `VITE_AUTH_MODE` switches between
+> `disabled` (dev, no auth) and `bff` (live, end-to-end tested). See
 > [Authentication](#authentication).
 
 ---
@@ -70,36 +73,39 @@ are reusable; `lib/utils/*` are pure. No route imports `fetch`.
 │   ├── vite-env.d.ts
 │   ├── lib/
 │   │   ├── config.ts           # the ONE place that reads import.meta.env
-│   │   ├── api/{client.ts, auth.ts, health.ts}
+│   │   ├── api/{client.ts, auth.ts, health.ts, logs.ts}
 │   │   ├── stores/{auth.svelte.ts, router.svelte.ts, preferences.svelte.ts}
 │   │   ├── components/{ui/Modal.svelte, auth/RouteGuard.svelte}
 │   │   ├── types/api.ts        # the API contract + boundary guards
 │   │   └── utils/errors.ts
 │   └── routes/                 # Home.svelte (guarded), Login.svelte, NotFound.svelte
-├── tests/{unit, e2e, mocks, public/mockServiceWorker.js (generated)}
+├── bff/                        # the confidential-client OIDC BFF (Node/TypeScript)
+│   ├── src/{config,session,csrf,oidc,proxy,http,server}.ts + routes/auth.ts
+│   └── README.md               # pointer to the README Authentication section
+├── tests/{unit, e2e (+ e2e/stubs/idp-and-api.mjs), mocks, public/mockServiceWorker.js (generated)}
 ├── scripts/{check-bundle-size.mjs, check-csp.mjs, extract-changelog.sh,
 │            extract-changelog.test.mjs}
 ├── Caddyfile                   # reference production host (in the release tarball)
-├── compose.dev.yaml + container.dev + container.prod
+├── compose.dev.yaml + container.{dev, prod, bff}
 ├── Makefile · CLAUDE.md · CHANGELOG.md · README.md · LICENSE
-└── vite/vitest/playwright/eslint/prettier/tsconfig configs
+└── vite/vitest/playwright/eslint/prettier/tsconfig(+ tsconfig.bff) configs
 ```
 
 ## Tech stack
 
-| Concern       | Choice                                                                          | Notes                                                               |
-| ------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Framework     | **Svelte 5** (runes: `$state`/`$derived`/`$effect`/`$props`/snippets)           | No SvelteKit — a static SPA behind Caddy.                           |
-| Language      | **TypeScript** (strict; `no-explicit-any: error`)                               | Pinned to `~5.9` — TS 6 toolchain support pending (decisions #11).  |
-| Build         | **Vite**                                                                        | `:3000`, proxies `/api`/`/auth`/`/health`; CSP-safe build settings. |
-| Package mgr   | **pnpm** (frozen lockfile in CI + containers)                                   |                                                                     |
-| State         | Runes in `.svelte.ts`, plain accessors                                          | Not `writable`. (decisions #7)                                      |
-| Router        | Hand-rolled History-API router                                                  | Params, back/forward, 404, lazy `import()`. (decisions #6)          |
-| Tests         | **Vitest Browser Mode** + `vitest-browser-svelte` + **MSW**; **Playwright** E2E | jsdom mishandles runes. (decisions #8)                              |
-| Dev container | `node:22-alpine` + pnpm, podman-compose                                         |                                                                     |
-| Prod host     | **Caddy** (TLS via Let's Encrypt; `tls internal` for LAN)                       | Reference, not a hard requirement. (decisions #10)                  |
-| Supply chain  | Syft SPDX-JSON SBOM at release; `make socket`                                   |                                                                     |
-| Runtime deps  | **Zero**                                                                        | Keep it lean — new deps are a supply-chain decision.                |
+| Concern       | Choice                                                                          | Notes                                                                               |
+| ------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Framework     | **Svelte 5** (runes: `$state`/`$derived`/`$effect`/`$props`/snippets)           | No SvelteKit — a static SPA behind Caddy.                                           |
+| Language      | **TypeScript** (strict; `no-explicit-any: error`)                               | Pinned to `~5.9` — TS 6 toolchain support pending (decisions #11).                  |
+| Build         | **Vite**                                                                        | `:3000`, proxies `/api`/`/auth`/`/health`; CSP-safe build settings.                 |
+| Package mgr   | **pnpm** (frozen lockfile in CI + containers)                                   |                                                                                     |
+| State         | Runes in `.svelte.ts`, plain accessors                                          | Not `writable`. (decisions #7)                                                      |
+| Router        | Hand-rolled History-API router                                                  | Params, back/forward, 404, lazy `import()`. (decisions #6)                          |
+| Tests         | **Vitest Browser Mode** + `vitest-browser-svelte` + **MSW**; **Playwright** E2E | jsdom mishandles runes. (decisions #8)                                              |
+| Dev container | `node:22-alpine` + pnpm, podman-compose                                         |                                                                                     |
+| Prod host     | **Caddy** (TLS via Let's Encrypt; `tls internal` for LAN)                       | Reference, not a hard requirement. (decisions #10)                                  |
+| Supply chain  | Syft SPDX-JSON SBOM at release; `make socket`                                   |                                                                                     |
+| Runtime deps  | Browser bundle **zero**; BFF **one** (`openid-client`)                          | Browser stays dependency-free; the BFF admits one audited OIDC lib (decisions #17). |
 
 > Versions are pinned in `package.json` against what was current at authoring
 > time (Svelte 5, Vite 8, Vitest 4). Run `pnpm outdated` to review upgrades.
@@ -136,80 +142,112 @@ dev-proxy target is the single exception, read in `vite.config.ts`). Only
 `VITE_`-prefixed, **non-secret** values reach the browser bundle. `.env` is
 git-ignored; `.env.example` documents every variable.
 
-| Variable          | Default                                | Purpose                                                                                                                               |
-| ----------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `VITE_API_TARGET` | `http://host.containers.internal:8080` | Backend the Vite **dev proxy** forwards `/api`, `/auth`, `/health` to. Dev-only — the browser always uses same-origin relative paths. |
-| `VITE_AUTH_MODE`  | `disabled`                             | The **auth switch**. `disabled` = no auth (dev user, no-op login). `bff` = wire to the Backend-For-Frontend.                          |
+| Variable          | Default                                | Purpose                                                                                                                                                                                                                                                                                |
+| ----------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VITE_API_TARGET` | `http://host.containers.internal:8080` | Backend the Vite **dev proxy** forwards `/api`, `/auth`, `/health` to. Dev-only — the browser always uses same-origin relative paths. In `bff` mode this points at the **BFF** (`http://bff:8081` in-compose, `http://localhost:8081` bare-metal), which in turn points at the Go API. |
+| `VITE_AUTH_MODE`  | `disabled`                             | The **auth switch** (`src/lib/config.ts`). `disabled` = no auth (static dev user, no-op login). `bff` = live login through the BFF.                                                                                                                                                    |
+
+The BFF is configured separately by its own `BFF_*` variables (server-side, never
+in the browser bundle) — see the [Authentication](#authentication) env table and
+`.env.example`.
 
 ## Authentication
 
-**Status: intentionally NOT implemented — only the seam is.** This mirrors the Go
-template's stance: ship the documented contract so the future BFF is a drop-in,
-without the template guessing your IdP.
+**Status: implemented as a token-free Backend-for-Frontend (BFF).** The SPA holds
+**no tokens**; the BFF (`bff/`, Node/TypeScript) is the confidential OIDC client
+and holds them all. This is the top-ranked architecture of
+[OAuth 2.0 for Browser-Based Apps](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-browser-based-apps)
+(§6.1) — an IESG-approved Best Current Practice in the RFC-Editor queue, not "just
+a draft".
 
-### What exists today (the seam)
+### The architecture, in one line
 
-- `VITE_AUTH_MODE` flag (`disabled` default).
-- `lib/types/api.ts` — the `CurrentUser`, `ApiError`, and `HealthResponse` shapes.
-- `lib/api/auth.ts` — `getCurrentUser()` / `login(returnTo?)` / `logout()` as
-  **contract-only stubs** with `// TODO(auth)` markers. In `disabled` mode
-  `getCurrentUser()` resolves a static dev user so guarded views render;
-  `login`/`logout` are documented no-ops.
-- `lib/stores/auth.svelte.ts` — holds only the `CurrentUser` profile, **in
-  memory, never persisted**.
-- `lib/components/auth/RouteGuard.svelte` — the guard boundary, wired into guarded
-  routes now. Pass-through in `disabled` mode; the `bff` branch is stubbed and
-  captures the intended destination as `returnTo`.
-- `lib/api/client.ts` — the single fetch wrapper already (1) sends
-  `credentials: 'include'`, (2) attaches `X-CSRF-Token` on unsafe methods, and
-  (3) contains the centralised 401→`login(returnTo)` seam.
+```
+Browser (SPA, no tokens)  →  Caddy  →  BFF (confidential OIDC client, holds tokens)  →  Go API
+                                          └─ Authorization Code + PKCE with the IdP (server-side)
+```
 
-**No tokens, no PKCE, no OIDC library, no token storage or parsing anywhere in
-`src/`.** Flip `VITE_AUTH_MODE=bff` and fill the stubs — that is the entire change.
+Everything is **same-origin** behind Caddy, which reverse-proxies `/api/*`,
+`/auth/*`, and `/health`. The browser only ever calls same-origin relative paths,
+so **`connect-src 'self'` in the CSP is unchanged** — the IdP round trip is a
+top-level navigation, not a `fetch`, and the token exchange happens server-side in
+the BFF. That is the headline security win: no token ever enters the browser, so
+XSS cannot exfiltrate one.
 
-### Intended future model (documented, not built): BFF, same-origin
+### Modes (`VITE_AUTH_MODE`)
 
-The SPA and Go API are **same-origin** behind Caddy, which reverse-proxies
-`/api/*`, `/auth/*`, and `/health` to the backend (the browser-based-apps BCP
-"same-domain" case). The **Go API is the OIDC client / BFF**: it performs
-Authorization Code + PKCE (S256), holds the access/refresh tokens server-side, and
-issues the browser a session cookie that is `HttpOnly; Secure; SameSite=Strict`
-with the `__Host-` prefix. **The SPA holds no tokens of any kind.**
+| Mode       | What happens                                                                                                                                                                                             |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `disabled` | No auth. `getCurrentUser()` resolves a static dev user so guarded views render; `login`/`logout` are no-ops. The auth seam is inert. Good for pure-frontend dev.                                         |
+| `bff`      | Live login through the BFF. `login()` navigates to `/auth/login`; `getCurrentUser()` calls `/auth/me`; `logout()` POSTs `/auth/logout`. The browser holds only the `__Host-` session cookie. E2E-tested. |
 
-**The four future `/auth/*` endpoints (BFF-side):**
+### The BFF's `/auth/*` and proxy endpoints
 
-| Endpoint         | Method | Responsibility                                                                                                                                                                               |
-| ---------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/auth/login`    | GET    | Build the OIDC request with PKCE S256, `state` (CSRF on the redirect) and `nonce` (ID-token replay); 302 to the IdP discovered via `.well-known/openid-configuration`. Honour `?return_to=`. |
-| `/auth/callback` | GET    | Validate `state`; exchange the code; validate the ID token (JWKS/`kid`, `iss`, `aud`, `exp`, `nbf`, `nonce`, **server-side `alg` allowlist**); set the session cookie.                       |
-| `/auth/me`       | GET    | Return the current `CurrentUser` from the server-side session — **never** a token.                                                                                                           |
-| `/auth/logout`   | POST   | Clear the session cookie, then RP-initiated logout at the IdP `end_session_endpoint`.                                                                                                        |
+| Endpoint                       | Method | Responsibility                                                                                                                                                                                                                                           |
+| ------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/auth/login`                  | GET    | Validate `?return_to=` (same-site relative only); create a login transaction (state, nonce, PKCE verifier) in a `__Host-txn` cookie; 302 to the IdP with `code_challenge_method=S256`.                                                                   |
+| `/auth/callback`               | GET    | Consume the transaction **once**; validate `state`; exchange the code with client secret + PKCE verifier; validate the ID token (JWKS, `iss`, `aud`, `exp`, `nonce`); create the session; set cookies; 302 to the validated `return_to`.                 |
+| `/auth/me`                     | GET    | With a session: `{id, displayName, email?, roles}` mapped from the ID-token claims (mirrors go-api-template's `mapClaimsToRoles`). No session: the Go `401 {"error":"unauthorised"}` envelope, so the SPA's 401 seam fires. **Never** returns a token.   |
+| `/auth/logout`                 | POST   | CSRF-protected. Destroy the session, expire both cookies; `200 {"logout_url"}` for RP-initiated logout when the IdP advertises `end_session_endpoint`, else `204`.                                                                                       |
+| `/api/*`                       | any    | Authenticated reverse proxy: strip inbound `Authorization`/`Cookie`, attach `Authorization: Bearer <access token>` from the session, refresh (single-flight, rotated) within 30 s of expiry, stream status + body through untouched (`403` stays `403`). |
+| `/health`, `/livez`, `/readyz` | GET    | Unauthenticated passthrough to the Go API.                                                                                                                                                                                                               |
 
-**CSRF defence in depth (mandatory in the intended design).** `SameSite=Strict` is
-necessary but, per OWASP, must not be the only control. For state-changing requests
-the BFF additionally enforces either a **double-submit CSRF token** (BFF sets a
-readable `csrf` cookie; the SPA echoes it in `X-CSRF-Token` — this template's
-choice, decisions #3) or **Fetch-Metadata** (`Sec-Fetch-Site`) validation. The SPA
-attaches the header today.
+### The BFF's environment (`BFF_*` — server-side, never in the bundle)
 
-**The ID token is never an API credential** — it is never sent to `/api`.
+| Variable            | Default                 | Purpose                                                                                                       |
+| ------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `BFF_PORT`          | `8081`                  | TCP port the BFF listens on.                                                                                  |
+| `BFF_PUBLIC_ORIGIN` | _(required)_            | Absolute public origin the browser reaches the BFF on. `redirect_uri` is derived as `<origin>/auth/callback`. |
+| `BFF_ISSUER_URL`    | _(required)_            | OIDC issuer URL for discovery (`<issuer>/.well-known/openid-configuration`).                                  |
+| `BFF_CLIENT_ID`     | _(required)_            | OAuth `client_id` registered at the IdP.                                                                      |
+| `BFF_CLIENT_SECRET` | _(required)_            | OAuth `client_secret`. **Confidential client** (BCP §6.1.3.1) — server-side only.                             |
+| `BFF_API_UPSTREAM`  | _(required)_            | Base URL of the Go API the BFF proxies `/api/*` to.                                                           |
+| `BFF_COOKIE_SECRET` | _(required, ≥32 bytes)_ | HMAC key for the signed double-submit CSRF token (security.md rule 2).                                        |
+| `BFF_SCOPES`        | `openid profile email`  | Space-delimited OIDC scopes.                                                                                  |
 
-### Standards the future implementation must follow
+### IdP setup checklist
 
-[OAuth 2.0 for Browser-Based Apps](https://datatracker.ietf.org/doc/draft-ietf-oauth-browser-based-apps/),
+- Register a **confidential** client (it has a `client_secret`).
+- Redirect URI: exactly `<BFF_PUBLIC_ORIGIN>/auth/callback`.
+- Enable **PKCE (S256)** — the BFF sends it even though it is confidential (RFC 9700
+  recommends PKCE for all clients).
+- Enable **refresh-token rotation** — the BFF stores the rotated refresh token.
+- **No token-endpoint CORS needed** — the code exchange is server-to-server from
+  the BFF, never a browser `fetch`.
+
+### CSRF defence in depth
+
+`SameSite=Strict` is necessary but, per OWASP, not sufficient alone. On unsafe
+methods the BFF also enforces a **signed double-submit CSRF token**: it sets a
+readable `csrf` cookie whose value is `HMAC-SHA256(BFF_COOKIE_SECRET, sessionId)`,
+and the SPA echoes it in `X-CSRF-Token`; the BFF recomputes and compares in
+constant time. A `Sec-Fetch-Site: cross-site` request is rejected before the CSRF
+check. The **ID token is never an API credential** — it is never sent to `/api`.
+
+### Pairing with the Go API
+
+The Go API (`go-api-template`, commit `dfb53b4`) is **unchanged and
+pattern-agnostic** — it just validates the bearer the BFF attaches. Make its
+`OIDC_ISSUER_URL` / `OIDC_AUDIENCE` match what the IdP mints for this client. In
+this same-origin BFF topology the Go CORS middleware can be removed (its own
+comment says so) — the browser never calls the Go API cross-origin.
+
+> **Lockstep with the Go API:** the BFF resolves the user; the Go API sets the UUID
+> via `shared.WithUserID` at the **`r.Route("/api/v1", …)`** block in
+> `cmd/api/main.go`, and handlers read it via `shared.UserIDFromContext`. See the
+> [`/auth-integration`](.claude/skills/auth-integration/SKILL.md) skill for the
+> module map and the production-hardening checklist.
+
+### Standards
+
+[OAuth 2.0 for Browser-Based Apps §6.1](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-browser-based-apps),
 [RFC 9700 (OAuth 2.0 Security BCP)](https://www.rfc-editor.org/info/rfc9700),
-[OAuth 2.1](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/),
+[RFC 7636 (PKCE)](https://www.rfc-editor.org/info/rfc7636),
 [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html), and the
 OWASP [CSRF](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html),
 [Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html),
 and [CSP](https://cheatsheetseries.owasp.org/cheatsheets/Content_Security_Policy_Cheat_Sheet.html)
 cheat sheets.
-
-> **Lockstep with the Go API:** the future BFF resolves the user and sets the UUID
-> via `shared.WithUserID` at the **`r.Route("/api/v1", …)`** block in
-> `cmd/api/main.go`; handlers read it via `shared.UserIDFromContext`. Implement
-> OIDC across both repos together — see the [TODO](#todo) and the
-> [`/auth-integration`](.claude/skills/auth-integration/SKILL.md) skill.
 
 ## Routing
 
@@ -243,7 +281,7 @@ One request wrapper — [`lib/api/client.ts`](src/lib/api/client.ts):
 relative `/api`/`/auth` paths, always `credentials: 'include'`, `X-CSRF-Token` on
 unsafe methods, JSON in/out, 204 handling, a typed `ApiError` envelope matching the
 Go template's `{"error","message"}` shape, and the centralised 401→`login(returnTo)`
-seam. **No retry/refresh logic in the SPA** — the future BFF owns refresh. Add
+seam. **No retry/refresh logic in the SPA** — the BFF owns token refresh. Add
 resources with [`/new-api-resource`](.claude/skills/new-api-resource/SKILL.md).
 
 ## Theming
@@ -254,12 +292,13 @@ literals.
 
 ## Testing
 
-| Layer            | Tooling                                                                 | Covers                                                                                                          |
-| ---------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Unit + component | **Vitest Browser Mode** + `vitest-browser-svelte` (Playwright provider) | Real-browser reactivity. `client.ts`, `router.ts`, `health.ts`, `Modal.svelte`, `RouteGuard.svelte`, `auth.ts`. |
-| API boundary     | **MSW** (Service Worker)                                                | `credentials:'include'`, CSRF header, 401→login, the health + auth stubs against mocked endpoints.              |
-| E2E              | **Playwright**                                                          | Routing (deep link, back/forward, 404, SPA fallback) and the auth-redirect seam (bff build, BFF mocked).        |
-| Coverage         | Vitest **v8** with a documented threshold                               | Wired into CI.                                                                                                  |
+| Layer            | Tooling                                                                 | Covers                                                                                                                     |
+| ---------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Unit + component | **Vitest Browser Mode** + `vitest-browser-svelte` (Playwright provider) | Real-browser reactivity. `client.ts`, `router.ts`, `health.ts`, `logs.ts`, `Modal.svelte`, `RouteGuard.svelte`, `auth.ts`. |
+| BFF              | **Vitest** `node` project (in-process stub IdP/upstream)                | `bff/src/**`: config, sessions, CSRF (HMAC + `Sec-Fetch-Site`), the OIDC flow, and the authenticated proxy. No browser.    |
+| API boundary     | **MSW** (Service Worker)                                                | `credentials:'include'`, CSRF header, 401→login, the health + logs resources against mocked endpoints.                     |
+| E2E              | **Playwright**                                                          | Routing (deep link, back/forward, 404, SPA fallback) and the **real BFF** against a stub IdP + stub API (`bff` project).   |
+| Coverage         | Vitest **v8** with a documented threshold                               | Wired into CI.                                                                                                             |
 
 **Chosen stack rationale + fallback (decisions #8):** jsdom/happy-dom mishandle
 Svelte 5 runes reactivity, so unit + component tests run in a **real browser**. The
@@ -281,10 +320,11 @@ for snippet-prop components) and `tests/e2e/`; MSW handlers + worker setup live 
 The source of truth is
 [`.claude/rules/security.md`](.claude/rules/security.md). Headlines:
 
-- **Token-free BFF auth seam** — the Go API holds tokens; the browser gets an
+- **Token-free BFF auth** — the BFF (`bff/`) holds all tokens; the browser gets an
   `HttpOnly; Secure; SameSite=Strict`, `__Host-` session cookie; the SPA stores no
-  token. **CSRF defence in depth** (double-submit `X-CSRF-Token`). **No session
-  material in Web Storage.** **The ID token is not an API credential.**
+  token. **CSRF defence in depth** (signed double-submit `X-CSRF-Token` +
+  `Sec-Fetch-Site` gate). **No session material in Web Storage.** **The ID token is
+  not an API credential.** The proxy strips inbound credentials and attaches its own.
 - **A CSP the built bundle actually satisfies:** `script-src 'self'` (no
   `unsafe-inline`/`unsafe-eval`), `default-src 'self'`, `connect-src 'self'`,
   `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`. Achieved
@@ -429,12 +469,15 @@ missing or empty section fails the release.
 
 These are intentional gaps a template adopter completes — not missing work:
 
-- **Wire OIDC via the BFF, in lockstep with the Go API.** Flip `VITE_AUTH_MODE=bff`
-  and fill the `lib/api/auth.ts` stubs (see
-  [`/auth-integration`](.claude/skills/auth-integration/SKILL.md)). The Go side
+- **Point the shipped BFF at your real IdP and the Go API.** The BFF is
+  implemented and E2E-tested against a stub IdP; going live is configuration, not
+  code: set the `BFF_*` env, flip `VITE_AUTH_MODE=bff`, register a confidential
+  client at your IdP, and work the production-hardening checklist (external session
+  store, secret management, absolute session lifetime) in
+  [`/auth-integration`](.claude/skills/auth-integration/SKILL.md). The Go side
   resolves the user and calls `shared.WithUserID` at the
   [`r.Route("/api/v1", …)`](https://github.com/sud0x0/go-api-template) seam in
-  `cmd/api/main.go`; implement both repos together so the contract matches.
+  `cmd/api/main.go`; match `OIDC_ISSUER_URL`/`OIDC_AUDIENCE` to what the IdP mints.
 - **Confirm the CSP** for any new asset type you introduce (fonts, images, an
   external API origin → extend `connect-src`/`font-src`); re-run `make csp-check`.
 - **Tune the bundle-size budget** in `scripts/check-bundle-size.mjs` as the app grows.

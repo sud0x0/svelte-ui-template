@@ -1,0 +1,17 @@
+{
+  // Type-checks the BFF server (bff/src), which nothing else covers:
+  // tsconfig.app.json is the browser bundle, tsconfig.node.json is config/tooling,
+  // tsconfig.e2e.json is the Playwright suite. Extends the Node config (same
+  // strictness, bundler resolution, erasableSyntaxOnly so `node` can strip types
+  // and `esbuild` can bundle without a transform step). Wired into `pnpm check`,
+  // `make check`, and the CI Type-check step.
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.bff.tsbuildinfo",
+    "types": ["node"],
+    // BFF code targets Node's DOM-free lib set plus WebCrypto/fetch (present in
+    // Node 22). ES2023 + the Node types cover crypto/http/Buffer; no `dom` lib.
+    "lib": ["ES2023"]
+  },
+  "include": ["bff/src/**/*.ts"]
+}

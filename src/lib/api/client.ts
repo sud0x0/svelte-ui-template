@@ -3,9 +3,9 @@ import { login } from './auth'
 
 // The single fetch wrapper. Every network call in the app goes through here —
 // no route or component calls `fetch` directly. It owns three auth-seam hooks
-// that exist TODAY so the future BFF switch is trivial:
+// that make `bff` mode work with no per-call changes:
 //
-//   1. credentials: 'include'  — always send the (future) HttpOnly session
+//   1. credentials: 'include'  — always send the BFF's HttpOnly session
 //      cookie. The SPA holds no token, so this cookie is the only credential.
 //   2. CSRF header on unsafe methods — double-submit defence in depth.
 //   3. Centralised 401 -> login(returnTo) seam.

@@ -3,10 +3,11 @@
 Production-ready **Svelte 5 (runes) SPA** template — not SvelteKit. The front-end
 counterpart to [go-api-template](https://github.com/sud0x0/go-api-template).
 Layered architecture (route → `api/client` → store → UI), a **token-free
-OIDC/BFF auth seam** (the contract, not an implementation), a hand-rolled
+OIDC/BFF auth model** — the SPA holds no tokens; a small confidential-client BFF
+(`bff/`) does, and `bff` mode is live and end-to-end tested — a hand-rolled
 History-API router, runes-first state in `.svelte.ts`, a strict CSP the build
 actually satisfies, and a real test harness (Vitest Browser Mode + MSW +
-Playwright). Stack, tooling, and a seam — not features.
+Playwright). Stack, tooling, an auth model, and a seam — not features.
 
 ## Common commands
 
@@ -111,8 +112,9 @@ attribution — the current mechanism; the older `"includeCoAuthoredBy"` key is 
   guarded?) at the one router site, add a smoke test.
 - `/new-api-resource` — add a typed `lib/api/` module (types first, through
   `client.ts`, guard the response, MSW test).
-- `/auth-integration` — complete the seam into a real BFF (flip `VITE_AUTH_MODE`,
-  fill the `auth.ts` stubs). Cross-links the Go repo's `r.Route("/api/v1", …)` seam.
+- `/auth-integration` — operate the shipped reference BFF (`bff/`): configure the
+  `BFF_*` env, flip `VITE_AUTH_MODE=bff`, point it at a real IdP + the Go API, and
+  work the production-hardening checklist. Cross-links the Go repo's `r.Route("/api/v1", …)` seam.
 - `/security-review` — walk `security.md` with file-cited verdicts; run the scanners.
 - `/architecture-review` — check layering, runes-in-`.svelte.ts`, code splitting,
   the auth seam; read `decisions.md` first.

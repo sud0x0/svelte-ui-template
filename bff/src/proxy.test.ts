@@ -1,0 +1,231 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import { createServer, type Server } from 'node:http'
+import type { BffConfig } from './config.ts'
+import type { OidcClient } from './oidc.ts'
+import { createProxy } from './proxy.ts'
+import {
+  createSessionStore,
+  type SessionStore,
+  type SessionData,
+  type StoredTokens,
+} from './session.ts'
+import { csrfToken } from './csrf.ts'
+
+const SECRET = 'proxy-test-cookie-secret-32-bytes!!'
+
+function baseConfig(): BffConfig {
+  return {
+    port: 0,
+    publicOrigin: 'http://127.0.0.1',
+    redirectUri: 'http://127.0.0.1/auth/callback',
+    issuerUrl: 'http://idp.test',
+    clientId: 'c',
+    clientSecret: 's',
+    apiUpstream: 'http://upstream.test',
+    cookieSecret: SECRET,
+    scopes: 'openid',
+  }
+}
+
+function fakeOidc(over: Partial<OidcClient> = {}): OidcClient {
+  return {
+    beginLogin: () => Promise.reject(new Error('unused')),
+    completeLogin: () => Promise.reject(new Error('unused')),
+    refresh: (prev) => Promise.resolve(prev),
+    hasEndSession: () => false,
+    endSessionUrl: () => '',
+    ...over,
+  }
+}
+
+function tokens(over: Partial<StoredTokens> = {}): StoredTokens {
+  return {
+    accessToken: 'access-original',
+    refreshToken: 'refresh-original',
+    idToken: 'id-original',
+    accessTokenExpiresAt: Date.now() + 3_600_000, // fresh by default
+    ...over,
+  }
+}
+
+function session(t: StoredTokens): SessionData {
+  return { tokens: t, claims: { sub: 'u1' }, expiresAt: Date.now() + 3_600_000 }
+}
+
+/** A stub upstream captured per-request, plus a mounted proxy server. */
+interface Harness {
+  base: string
+  sessions: SessionStore
+  captured: { url: string; headers: Headers }[]
+  close: () => Promise<void>
+}
+
+async function mount(opts: {
+  oidc?: OidcClient
+  respond?: (req: { url: string; headers: Headers }) => Response
+}): Promise<Harness> {
+  const captured: { url: string; headers: Headers }[] = []
+  const sessions = createSessionStore()
+  const fetchImpl = ((input: string | URL, init?: RequestInit) => {
+    const url = String(input)
+    const headers = new Headers(init?.headers)
+    const rec = { url, headers }
+    captured.push(rec)
+    return Promise.resolve(
+      opts.respond ? opts.respond(rec) : new Response('{"ok":true}', { status: 200 })
+    )
+  }) as typeof fetch
+
+  const proxy = createProxy({
+    config: baseConfig(),
+    sessions,
+    oidc: opts.oidc ?? fakeOidc(),
+    fetchImpl,
+  })
+
+  const server: Server = createServer((req, res) => {
+    const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname
+    if (path === '/health') return void proxy.health(req, res)
+    return void proxy.api(req, res)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const addr = server.address()
+  if (addr === null || typeof addr === 'string') throw new Error('no port')
+  return {
+    base: `http://127.0.0.1:${addr.port}`,
+    sessions,
+    captured,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  }
+}
+
+describe('authenticated proxy', () => {
+  let h: Harness
+  afterEach(async () => {
+    await h.close()
+  })
+
+  it('attaches the session bearer and STRIPS inbound Authorization + Cookie', async () => {
+    h = await mount({})
+    const sid = h.sessions.create(session(tokens({ accessToken: 'the-real-token' })))
+    const res = await fetch(`${h.base}/api/v1/logs?limit=10`, {
+      headers: {
+        cookie: `__Host-session=${sid}`,
+        authorization: 'Bearer attacker-smuggled',
+        'x-request-id': 'req-42',
+      },
+    })
+    expect(res.status).toBe(200)
+    const upstream = h.captured[0]
+    expect(upstream.url).toBe('http://upstream.test/api/v1/logs?limit=10')
+    // Only the BFF's bearer reaches the API.
+    expect(upstream.headers.get('authorization')).toBe('Bearer the-real-token')
+    expect(upstream.headers.has('cookie')).toBe(false)
+    // Tracing header forwarded.
+    expect(upstream.headers.get('x-request-id')).toBe('req-42')
+  })
+
+  it('no session -> the Go 401 envelope, byte-for-byte, and does NOT proxy', async () => {
+    h = await mount({})
+    const res = await fetch(`${h.base}/api/v1/logs`)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: 'unauthorised', message: 'no active session' })
+    expect(h.captured).toHaveLength(0)
+  })
+
+  it('passes a 403 through untouched (403 is not 401)', async () => {
+    h = await mount({
+      respond: () => new Response('{"error":"forbidden"}', { status: 403 }),
+    })
+    const sid = h.sessions.create(session(tokens()))
+    const res = await fetch(`${h.base}/api/v1/logs`, {
+      headers: { cookie: `__Host-session=${sid}` },
+    })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'forbidden' })
+  })
+
+  it('health passthrough is unauthenticated (no bearer attached)', async () => {
+    h = await mount({})
+    const res = await fetch(`${h.base}/health`)
+    expect(res.status).toBe(200)
+    expect(h.captured[0].url).toBe('http://upstream.test/health')
+    expect(h.captured[0].headers.has('authorization')).toBe(false)
+  })
+
+  it('refreshes SINGLE-FLIGHT: two concurrent expiring calls hit the token endpoint once', async () => {
+    let refreshCount = 0
+    const oidc = fakeOidc({
+      refresh: async (prev) => {
+        refreshCount += 1
+        await new Promise((r) => setTimeout(r, 25)) // hold the flight open
+        return { ...prev, accessToken: 'refreshed-access', refreshToken: 'refresh-rotated' }
+      },
+    })
+    h = await mount({ oidc })
+    const sid = h.sessions.create(session(tokens({ accessTokenExpiresAt: Date.now() }))) // expiring now
+
+    const [a, b] = await Promise.all([
+      fetch(`${h.base}/api/x`, { headers: { cookie: `__Host-session=${sid}` } }),
+      fetch(`${h.base}/api/x`, { headers: { cookie: `__Host-session=${sid}` } }),
+    ])
+    expect(a.status).toBe(200)
+    expect(b.status).toBe(200)
+    expect(refreshCount).toBe(1) // single-flight
+
+    // Both upstream calls carried the refreshed token, and the rotated refresh
+    // token was persisted.
+    expect(
+      h.captured.every((c) => c.headers.get('authorization') === 'Bearer refreshed-access')
+    ).toBe(true)
+    expect(h.sessions.get(sid)?.tokens.refreshToken).toBe('refresh-rotated')
+  })
+
+  it('destroys the session and answers 401 when refresh fails', async () => {
+    const oidc = fakeOidc({ refresh: () => Promise.reject(new Error('invalid_grant')) })
+    h = await mount({ oidc })
+    const sid = h.sessions.create(session(tokens({ accessTokenExpiresAt: Date.now() })))
+    const res = await fetch(`${h.base}/api/x`, { headers: { cookie: `__Host-session=${sid}` } })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: 'unauthorised', message: 'session expired' })
+    expect(h.sessions.get(sid)).toBeUndefined()
+    expect(h.captured).toHaveLength(0) // never proxied
+  })
+
+  it('rejects an unsafe /api write without a valid CSRF token, and accepts it with one', async () => {
+    h = await mount({})
+    const sid = h.sessions.create(session(tokens()))
+    const noToken = await fetch(`${h.base}/api/v1/logs`, {
+      method: 'POST',
+      headers: { cookie: `__Host-session=${sid}`, 'sec-fetch-site': 'same-origin' },
+    })
+    expect(noToken.status).toBe(403)
+    expect(h.captured).toHaveLength(0)
+
+    const withToken = await fetch(`${h.base}/api/v1/logs`, {
+      method: 'POST',
+      headers: {
+        cookie: `__Host-session=${sid}`,
+        'x-csrf-token': csrfToken(SECRET, sid),
+        'sec-fetch-site': 'same-origin',
+      },
+    })
+    expect(withToken.status).toBe(200)
+    expect(h.captured).toHaveLength(1)
+  })
+
+  it('rejects an unsafe /api write labelled Sec-Fetch-Site: cross-site', async () => {
+    h = await mount({})
+    const sid = h.sessions.create(session(tokens()))
+    const res = await fetch(`${h.base}/api/v1/logs`, {
+      method: 'POST',
+      headers: {
+        cookie: `__Host-session=${sid}`,
+        'x-csrf-token': csrfToken(SECRET, sid),
+        'sec-fetch-site': 'cross-site',
+      },
+    })
+    expect(res.status).toBe(403)
+    expect(h.captured).toHaveLength(0)
+  })
+})

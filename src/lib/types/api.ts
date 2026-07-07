@@ -35,6 +35,30 @@ export interface CurrentUser {
   roles?: string[]
 }
 
+/**
+ * A user log entry from the Go API's reference resource
+ * (go-api-template internal/userlog/userlog_model.go). Timestamps are RFC3339
+ * strings as Go marshals `time.Time`.
+ */
+export interface Log {
+  id: string
+  user_id: string
+  date_and_time: string
+  log: string
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * `GET /api/v1/logs` in cursor mode: `{ logs, next_cursor? }`. (The Go API also
+ * has an offset mode that returns a bare array; the SPA uses the wrapped cursor
+ * shape — the BFF/stub returns it — so a component never branches on two shapes.)
+ */
+export interface ListLogsResponse {
+  logs: Log[]
+  next_cursor?: string
+}
+
 // --- Boundary guards --------------------------------------------------------
 // Narrow untrusted JSON to the contract above. The client calls these so a
 // malformed response is caught at the edge, not three components deep.
@@ -79,4 +103,30 @@ export function assertCurrentUser(value: unknown): CurrentUser {
     }
   }
   throw new Error('Malformed CurrentUser')
+}
+
+function isLog(value: unknown): value is Log {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return (
+    typeof v.id === 'string' &&
+    typeof v.user_id === 'string' &&
+    typeof v.date_and_time === 'string' &&
+    typeof v.log === 'string' &&
+    typeof v.created_at === 'string' &&
+    typeof v.updated_at === 'string'
+  )
+}
+
+/** Narrows a parsed `/api/v1/logs` body, throwing if it does not match the contract. */
+export function assertListLogsResponse(value: unknown): ListLogsResponse {
+  if (typeof value === 'object' && value !== null) {
+    const v = value as Record<string, unknown>
+    // `next_cursor` is optional, but if present it MUST be a string.
+    const cursorOk = v.next_cursor === undefined || typeof v.next_cursor === 'string'
+    if (Array.isArray(v.logs) && v.logs.every(isLog) && cursorOk) {
+      return value as ListLogsResponse
+    }
+  }
+  throw new Error('Malformed ListLogsResponse')
 }

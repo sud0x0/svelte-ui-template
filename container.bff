@@ -1,0 +1,50 @@
+# ============================================================================
+# Backend-for-Frontend (BFF) image — the confidential OIDC client + API proxy.
+# ============================================================================
+# Multi-stage: bundle the TypeScript server with esbuild, then run only the
+# self-contained bundle on a minimal Node image. The runtime stage carries NO
+# node_modules — `pnpm bff:build` inlines the single runtime dependency
+# (openid-client) into bff/dist/server.mjs.
+#
+# Build:  podman build -f container.bff -t svelte-ui-bff:latest .
+# Run:    podman run -p 8081:8081 --env-file .env svelte-ui-bff:latest
+# Required env (see .env.example): BFF_PUBLIC_ORIGIN, BFF_ISSUER_URL,
+#   BFF_CLIENT_ID, BFF_CLIENT_SECRET, BFF_API_UPSTREAM, BFF_COOKIE_SECRET.
+
+# --- build stage ------------------------------------------------------------
+# Base image pinned by digest for reproducible builds; the comment names the tag
+# the digest resolved from. Refresh both together, in sync with container.dev /
+# container.prod (same pin). (A Dockerfile FROM line can't carry an inline comment.)
+# tag: node:22-alpine
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS build
+
+# pnpm pinned to an exact version — keep in sync with package.json packageManager.
+RUN npm install -g pnpm@10.33.2
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm bff:build
+
+# --- runtime stage ----------------------------------------------------------
+# tag: node:22-alpine
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
+
+WORKDIR /app
+# Only the bundle ships — no source, no node_modules. Smaller image, smaller
+# attack surface.
+COPY --from=build /app/bff/dist ./bff/dist
+
+# Run as the image's built-in non-root user.
+USER node
+
+EXPOSE 8081
+
+# No HEALTHCHECK by design: the BFF's own /health is a PROXY to the Go API, so a
+# container healthcheck here would report the upstream's health, not the BFF's,
+# and would add a curl/wget dependency to a deliberately minimal image. Liveness
+# is better handled by the orchestrator (a TCP check on :8081, or hitting the Go
+# API's health directly).
+CMD ["node", "bff/dist/server.mjs"]

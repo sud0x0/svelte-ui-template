@@ -8,23 +8,41 @@ import { playwright } from '@vitest/browser-playwright'
 // @testing-library/svelte + jsdom stack is the documented fallback for
 // browserless CI — see .claude/rules/decisions.md.
 export default defineConfig({
-  plugins: [svelte()],
-  // The MSW worker is test-only tooling and must NOT ship in the production
-  // bundle (MSW's own docs + the worker header say so). It lives under
-  // tests/public/ — never the app's public/ — and this test-only publicDir makes
-  // Vitest's browser server serve it at /mockServiceWorker.js. The app build
-  // (vite.config.ts) keeps the real public/, so `vite build` never copies it.
-  publicDir: 'tests/public',
   test: {
-    // MSW worker + any global setup is registered here.
-    setupFiles: ['./tests/mocks/setup.ts'],
-    include: ['tests/unit/**/*.test.ts', 'src/**/*.{test,spec}.ts'],
-    browser: {
-      enabled: true,
-      provider: playwright(),
-      headless: true,
-      instances: [{ browser: 'chromium' }],
-    },
+    // Two projects, two runtimes. The SPA is tested in a REAL browser (runes
+    // reactivity); the BFF is a Node server, tested in the `node` environment
+    // (node:http/node:crypto/openid-client) — a browser can't run it and jsdom
+    // would misrepresent it. `pnpm exec vitest run` runs both.
+    projects: [
+      {
+        // SPA — browser mode. The svelte plugin + the test-only publicDir (which
+        // serves the MSW worker at /mockServiceWorker.js, kept out of the app's
+        // public/ so `vite build` never ships it) are scoped to THIS project.
+        plugins: [svelte()],
+        publicDir: 'tests/public',
+        test: {
+          name: 'browser',
+          setupFiles: ['./tests/mocks/setup.ts'],
+          include: ['tests/unit/**/*.test.ts', 'src/**/*.{test,spec}.ts'],
+          browser: {
+            enabled: true,
+            provider: playwright(),
+            headless: true,
+            instances: [{ browser: 'chromium' }],
+          },
+        },
+      },
+      {
+        // BFF — Node environment. No browser, no MSW; these tests spin up real
+        // in-process node:http listeners (stub IdP / stub upstream) so the OIDC
+        // and proxy code runs exactly as it will in production.
+        test: {
+          name: 'bff',
+          environment: 'node',
+          include: ['bff/src/**/*.test.ts'],
+        },
+      },
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],

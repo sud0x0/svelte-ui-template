@@ -82,6 +82,7 @@ jobs:
           pnpm exec svelte-check --tsconfig ./tsconfig.app.json
           pnpm exec tsc -p tsconfig.node.json
           pnpm exec tsc -p tsconfig.e2e.json
+          pnpm exec tsc -p tsconfig.bff.json
 
       # Pins extract-changelog.sh behaviour — the release pipeline depends on it.
       # No browser needed, so it runs before the Playwright install and fails fast.

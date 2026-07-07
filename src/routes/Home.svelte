@@ -3,7 +3,8 @@
   import { logout } from '../lib/api/auth'
   import { clearAuthUser } from '../lib/stores/auth.svelte'
   import { getHealth } from '../lib/api/health'
-  import { errorMessage } from '../lib/utils/errors'
+  import { listLogs } from '../lib/api/logs'
+  import { errorMessage, parseApiError } from '../lib/utils/errors'
   import Modal from '../lib/components/ui/Modal.svelte'
 
   // Data loading via an explicit load function — NOT inside $effect. Effects are
@@ -16,6 +17,24 @@
 
   function refreshHealth() {
     healthPromise = loadHealth()
+  }
+
+  // Recent logs — the reference AUTHENTICATED resource. Same load-outside-$effect
+  // discipline; the {#await} block below renders loading / empty / list, and the
+  // catch distinguishes a 403 (authorised-but-forbidden — no redirect) from a
+  // generic error.
+  function loadLogs() {
+    return listLogs()
+  }
+  let logsPromise = $state(loadLogs())
+
+  function refreshLogs() {
+    logsPromise = loadLogs()
+  }
+
+  /** A 403 means "signed in but not authorised" — render in place, never redirect. */
+  function isForbidden(error: unknown): boolean {
+    return parseApiError(error).error === 'forbidden'
   }
 
   let modalOpen = $state(false)
@@ -58,6 +77,39 @@
       <p class="health-error">Could not reach the backend: {errorMessage(error)}</p>
     {/await}
   </div>
+
+  {#if user}
+    <!-- Reference AUTHENTICATED resource. In bff mode this rides the session
+         cookie through the BFF, which attaches the bearer server-side. -->
+    <div class="card">
+      <div class="card__head">
+        <h2>Recent logs</h2>
+        <button type="button" onclick={refreshLogs}>Refresh</button>
+      </div>
+      {#await logsPromise}
+        <p>Loading logs…</p>
+      {:then response}
+        {#if response.logs.length === 0}
+          <p class="logs-empty">No logs yet.</p>
+        {:else}
+          <ul class="logs">
+            {#each response.logs as entry (entry.id)}
+              <li>
+                <time datetime={entry.date_and_time}>{entry.date_and_time}</time>
+                <span>{entry.log}</span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      {:catch error}
+        {#if isForbidden(error)}
+          <p class="logs-forbidden">You’re signed in, but not authorised to view logs.</p>
+        {:else}
+          <p class="logs-error">Could not load logs: {errorMessage(error)}</p>
+        {/if}
+      {/await}
+    </div>
+  {/if}
 
   <div class="card">
     <h2>Modal demo</h2>
@@ -111,6 +163,39 @@
   }
 
   .health-error {
+    color: var(--danger);
+  }
+
+  .logs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .logs li {
+    display: flex;
+    gap: 0.75rem;
+    align-items: baseline;
+  }
+
+  .logs time {
+    color: var(--text-secondary);
+    font-size: 0.85em;
+    white-space: nowrap;
+  }
+
+  .logs-empty {
+    color: var(--text-secondary);
+  }
+
+  .logs-forbidden {
+    color: var(--danger);
+  }
+
+  .logs-error {
     color: var(--danger);
   }
 </style>

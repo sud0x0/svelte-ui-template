@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.e2e.json",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.e2e.json && tsc -p tsconfig.bff.json",
+    "bff:build": "esbuild bff/src/server.ts --bundle --platform=node --format=esm --outfile=bff/dist/server.mjs",
+    "bff:dev": "node --watch bff/src/server.ts",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -27,6 +29,7 @@
     "@vitest/browser": "^4.1.8",
     "@vitest/browser-playwright": "^4.1.8",
     "@vitest/coverage-v8": "^4.1.8",
+    "esbuild": "0.28.1",
     "eslint": "^10.2.0",
     "eslint-plugin-svelte": "^3.19.0",
     "globals": "^17.6.0",
@@ -50,5 +53,8 @@
   "packageManager": "pnpm@10.33.2",
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "openid-client": "6.8.4"
   }
 }

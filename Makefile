@@ -17,6 +17,7 @@ VERSION ?= $(shell node -p "require('./package.json').version" 2>/dev/null || ec
         ci verify \
         lint fmt fmt-check check \
         test test-unit test-e2e test-coverage test-scripts size csp-check \
+        bff-build bff-dev bff-test \
         pre-commit-install pre-commit-run audit semgrep socket help
 
 # `node_modules` is a real-file target: any rule depending on it triggers
@@ -84,7 +85,7 @@ destroy:
 
 clean:
 	@echo "Cleaning build, test, and release artefacts..."
-	@rm -rf node_modules/ dist/ coverage/ playwright-report/ test-results/ .svelte-kit/
+	@rm -rf node_modules/ dist/ bff/dist/ coverage/ playwright-report/ test-results/ .svelte-kit/
 	@rm -rf $(PROJECT)-*/ $(PROJECT)-*.tar.gz
 	@rm -f *.sbom.json checksums.txt
 	@echo "Clean complete."
@@ -158,6 +159,8 @@ changelog-check:
 # Umbrella 1 — ci. The everyday gate agents run after every change: lint +
 # format + types + unit/component tests + build + bundle-size. Composes the
 # granular targets, so no command string is duplicated. NEEDS chromium.
+# The BFF is FOLDED IN automatically: `check` type-checks bff/src (tsconfig.bff),
+# and `test-unit` runs the Vitest `bff` node project alongside the browser one.
 ci:
 	@$(MAKE) --no-print-directory lint fmt-check check test-unit size
 	@echo ""
@@ -187,6 +190,24 @@ test-e2e: node_modules
 
 # Unit + e2e (convenience; the gates are ci / verify). NEEDS browsers.
 test: test-unit test-e2e
+
+# BFF unit tests only (the Vitest `node` project: sessions, CSRF, OIDC flow,
+# proxy). `ci`/`test-unit` already run these with the browser project — this
+# runs them alone. NO browser.
+bff-test: node_modules
+	@echo "==> vitest run --project bff" && pnpm exec vitest run --project bff
+
+# Bundle the BFF server to bff/dist/server.mjs (esbuild). The container.bff build
+# stage runs the same script. NO browser.
+bff-build: node_modules
+	@echo "==> esbuild bff" && pnpm bff:build
+
+# Watch-mode BFF dev server. Runs the TypeScript SOURCE directly via Node's
+# native type-stripping (Node >= 22.18) — chosen over adding a tsx/ts-node
+# dependency to keep the toolchain lean (esbuild is reserved for the prod
+# bundle). Requires the BFF_* env — see .env.example.
+bff-dev: node_modules
+	@echo "==> bff dev (node --watch bff/src/server.ts)" && pnpm bff:dev
 
 # Tests for the repo's node scripts (the extract-changelog fixture). The release
 # pipeline depends on extract-changelog.sh, so its behaviour is pinned. NO browser.
@@ -227,12 +248,14 @@ fmt: node_modules
 fmt-check: node_modules
 	@echo "==> prettier --check" && pnpm exec prettier --check .
 
-# Type-check the app (svelte-check), the Node-context config, and the E2E suite.
+# Type-check the app (svelte-check), the Node-context config, the E2E suite, and
+# the BFF server (bff/src via tsconfig.bff.json).
 check: node_modules
 	@echo "==> svelte-check + tsc"
 	@pnpm exec svelte-check --tsconfig ./tsconfig.app.json
 	@pnpm exec tsc -p tsconfig.node.json
 	@pnpm exec tsc -p tsconfig.e2e.json
+	@pnpm exec tsc -p tsconfig.bff.json
 
 pre-commit-run: node_modules
 	@pre-commit run --all-files
@@ -293,6 +316,12 @@ help:
 	@echo "  test             Unit + e2e (convenience)"
 	@echo "  size             Gzipped bundle-size budget gate"
 	@echo "  csp-check        Build + serve + prove the CSP in a real browser (needs chromium)"
+	@echo ""
+	@echo "BFF (Backend-for-Frontend)"
+	@echo "--------------------------"
+	@echo "  bff-dev          Watch-mode BFF dev server (node --watch on the source; needs BFF_* env)"
+	@echo "  bff-build        Bundle the BFF to bff/dist/server.mjs (esbuild)"
+	@echo "  bff-test         BFF unit tests only (Vitest node project; ci already runs these)"
 	@echo ""
 	@echo "Code quality"
 	@echo "------------"

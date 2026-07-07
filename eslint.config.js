@@ -20,6 +20,7 @@ export default ts.config(
     ignores: [
       'node_modules/**',
       'dist/**',
+      'bff/dist/**',
       'coverage/**',
       'playwright-report/**',
       'tests/public/mockServiceWorker.js',
@@ -69,11 +70,26 @@ export default ts.config(
     },
   },
   {
+    // The BFF server (bff/src) is Node code, type-checked via tsconfig.bff.json,
+    // so it keeps the typed rules from the base block but swaps browser globals
+    // for Node globals (process, Buffer, node:* built-ins).
+    files: ['bff/**/*.ts'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
     // Node-context config + tooling files use Node globals. scripts/ also runs
     // code inside the browser via Playwright (page.evaluate/addInitScript), so
     // browser globals are allowed there too. These files are not part of a
     // type-checked tsconfig project, so typed rules are disabled here.
-    files: ['**/*.config.{js,ts}', 'scripts/**/*.mjs', 'tests/e2e/**/*.ts', 'playwright.config.ts'],
+    files: [
+      '**/*.config.{js,ts}',
+      'scripts/**/*.mjs',
+      'tests/e2e/**/*.ts',
+      'tests/e2e/**/*.mjs',
+      'playwright.config.ts',
+    ],
     extends: [ts.configs.disableTypeChecked],
     languageOptions: {
       globals: {

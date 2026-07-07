@@ -67,6 +67,18 @@ http://{$SITE_ADDRESS} {
 
 	# Reverse-proxy the API, auth, and health surfaces to the backend so the SPA
 	# stays same-origin (enables SameSite=Strict session cookies, no CORS).
+	#
+	# What {$API_UPSTREAM} points at depends on the auth mode:
+	#   disabled — the Go API directly (Browser -> Caddy -> Go API).
+	#   bff      — the BFF (Browser -> Caddy -> BFF -> Go API). The BFF is the
+	#              confidential OIDC client; it terminates /auth/*, owns the
+	#              __Host- session cookie, and attaches the bearer to /api/*.
+	#
+	# Either way the CSP above is UNCHANGED, and connect-src 'self' still holds.
+	# This is the headline security win of the BFF architecture: the browser only
+	# ever talks to THIS origin (fetch stays same-origin) and the IdP round trip is
+	# a top-level navigation, not a connect-src fetch — so no IdP origin, no token
+	# endpoint, and no CORS ever need to appear in the policy.
 	@backend path /api/* /auth/* /health
 	handle @backend {
 		reverse_proxy {$API_UPSTREAM} {
