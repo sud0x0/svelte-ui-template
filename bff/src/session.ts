@@ -150,6 +150,13 @@ export interface HostCookieOptions {
   httpOnly?: boolean
   /** Max-Age in seconds. Omit for a session cookie (cleared when the browser closes). */
   maxAgeSeconds?: number
+  /**
+   * SameSite policy, defaulting to 'Strict' when absent. Session and csrf cookies
+   * take the Strict default. The login-transaction cookie passes 'Lax' so it
+   * survives the cross-site top-level navigation back from the IdP on
+   * /auth/callback (a Strict cookie is withheld on that cross-site request).
+   */
+  sameSite?: 'Strict' | 'Lax'
 }
 
 /**
@@ -157,12 +164,17 @@ export interface HostCookieOptions {
  * - `Secure`   — REQUIRED by `__Host-` and by 6.1.3.2. Browsers still accept
  *   Secure cookies over `http://localhost`, so local dev on plain HTTP works.
  * - `HttpOnly` — keeps the session cookie out of JS (security.md rule 3).
- * - `SameSite=Strict` — SHOULD per 6.1.3.2; the cookie is never sent cross-site.
+ * - `SameSite`: caller-chosen via {@link HostCookieOptions.sameSite}, defaulting
+ *   to `Strict` (the session and csrf cookies are never sent cross-site). The
+ *   login-transaction cookie passes `Lax` because the OAuth callback is a
+ *   cross-site top-level navigation and a `Strict` cookie would be withheld on
+ *   it. §6.1.3.2 makes SameSite a SHOULD, not a MUST, so `Lax` here is compliant.
  * - `Path=/`   — REQUIRED by `__Host-`.
  * - no `Domain` — REQUIRED by `__Host-`; binds the cookie to this exact host.
  */
 export function serializeHostCookie(name: string, value: string, opts: HostCookieOptions): string {
-  const parts = [`${name}=${value}`, 'Path=/', 'Secure', 'SameSite=Strict']
+  const sameSite = opts.sameSite ?? 'Strict'
+  const parts = [`${name}=${value}`, 'Path=/', 'Secure', `SameSite=${sameSite}`]
   if (opts.httpOnly) parts.push('HttpOnly')
   if (opts.maxAgeSeconds !== undefined) parts.push(`Max-Age=${opts.maxAgeSeconds}`)
   return parts.join('; ')

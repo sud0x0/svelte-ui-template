@@ -106,6 +106,7 @@ describe('auth routes (confidential OIDC flow)', () => {
       clientId: idp.clientId,
       clientSecret: idp.clientSecret,
       apiUpstream: 'http://127.0.0.1:1', // unused here
+      apiTimeoutMs: 10_000,
       cookieSecret: 'unit-test-cookie-secret-32-bytes!!',
       scopes: 'openid profile email',
     }

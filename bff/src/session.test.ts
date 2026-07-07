@@ -25,9 +25,26 @@ describe('session cookie contract (BCP 6.1.3.2)', () => {
     )
   })
 
-  it('serializes the short-lived txn cookie with Max-Age', () => {
-    expect(serializeHostCookie(TXN_COOKIE, 'xyz', { httpOnly: true, maxAgeSeconds: 300 })).toBe(
-      '__Host-txn=xyz; Path=/; Secure; SameSite=Strict; HttpOnly; Max-Age=300'
+  it('serializes the short-lived txn cookie with SameSite=Lax and Max-Age', () => {
+    // The login-transaction cookie is Lax (not Strict) so the browser still sends
+    // it on the cross-site top-level callback navigation from the IdP (S1). See
+    // routes/auth.ts login().
+    expect(
+      serializeHostCookie(TXN_COOKIE, 'xyz', {
+        httpOnly: true,
+        maxAgeSeconds: 300,
+        sameSite: 'Lax',
+      })
+    ).toBe('__Host-txn=xyz; Path=/; Secure; SameSite=Lax; HttpOnly; Max-Age=300')
+  })
+
+  it('defaults SameSite to Strict when no sameSite option is given', () => {
+    expect(serializeHostCookie(SESSION_COOKIE, 'abc', { httpOnly: true })).toContain(
+      'SameSite=Strict'
+    )
+    // An explicit Strict is byte-identical to the default.
+    expect(serializeHostCookie(SESSION_COOKIE, 'abc', { httpOnly: true, sameSite: 'Strict' })).toBe(
+      serializeHostCookie(SESSION_COOKIE, 'abc', { httpOnly: true })
     )
   })
 

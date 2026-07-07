@@ -53,4 +53,17 @@ describe('BFF config', () => {
     expect(() => loadConfig({ ...BASE, BFF_PORT: '0' })).toThrow(ConfigError)
     expect(() => loadConfig({ ...BASE, BFF_PORT: 'not-a-port' })).toThrow(ConfigError)
   })
+
+  it('defaults the upstream timeout to 10000ms and accepts a valid override', () => {
+    expect(loadConfig(BASE).apiTimeoutMs).toBe(10_000)
+    expect(loadConfig({ ...BASE, BFF_API_TIMEOUT_MS: '2500' }).apiTimeoutMs).toBe(2500)
+  })
+
+  it('rejects an out-of-range or non-integer upstream timeout', () => {
+    // Bounds are (0, 60000] ms, integer only.
+    expect(() => loadConfig({ ...BASE, BFF_API_TIMEOUT_MS: '0' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...BASE, BFF_API_TIMEOUT_MS: '60001' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...BASE, BFF_API_TIMEOUT_MS: '1.5' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...BASE, BFF_API_TIMEOUT_MS: 'nope' })).toThrow(ConfigError)
+  })
 })

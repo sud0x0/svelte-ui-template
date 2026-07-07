@@ -12,6 +12,13 @@ const STUB = 'http://localhost:4199'
 // flips, so tests must not interleave.
 test.describe.configure({ mode: 'serial' })
 
+// NOTE (S1): the stub IdP runs on localhost too, so the login round trip here is
+// SAME-SITE (different ports on the same site count as same-site). This suite
+// therefore cannot exercise the cross-site withholding of a Strict transaction
+// cookie that S1 is about. The __Host-txn SameSite=Lax behaviour is pinned by the
+// unit assertion in bff/src/session.test.ts, plus manual/staging verification
+// against a real external IdP.
+
 /** Logs in through the stub IdP's login page and lands on Home. */
 async function loginToHome(page: Page): Promise<void> {
   await page.goto('/')

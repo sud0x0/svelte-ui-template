@@ -43,6 +43,10 @@ location.search` and cannot be trusted to sanitise it), so the BFF's
    (`https:`, `javascript:`, `user@host`, …), falling back to `/`. Implemented and
    tested in `bff/src/routes/auth.ts` (`validateReturnTo`). An unvalidated redirect
    target is an open redirect ([OWASP Unvalidated Redirects & Forwards](https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html)).
+   **The BFF is the single validation owner. Do NOT duplicate the validator on the
+   SPA side** (the SPA cannot be trusted for this check, and a second copy invites
+   drift where one side is tightened and the other is not). The SPA comment at the
+   `login()` call site records this deliberately.
    See [auth-integration](../skills/auth-integration/SKILL.md).
 
 2. **CSRF defence in depth for the cookie session.** `SameSite=Strict` is

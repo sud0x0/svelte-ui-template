@@ -31,6 +31,8 @@ export interface BffConfig {
   clientSecret: string
   /** Base URL of the Go API this BFF proxies `/api/*` to. */
   apiUpstream: string
+  /** Timeout in ms for a proxied upstream (Go API) call, so a hung upstream cannot pin a BFF connection. */
+  apiTimeoutMs: number
   /** HMAC key for the signed double-submit CSRF token (security.md rule 2). ≥32 bytes. */
   cookieSecret: string
   /** Space-delimited OIDC scopes. */
@@ -84,6 +86,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
     throw new ConfigError(`BFF_PORT must be a valid port number (got: ${portRaw})`)
   }
 
+  // Bound the proxied upstream call so a hung Go API cannot pin a BFF connection
+  // until the OS socket timeout. Integer ms in (0, 60000].
+  const apiTimeoutRaw = env.BFF_API_TIMEOUT_MS ?? '10000'
+  const apiTimeoutMs = Number(apiTimeoutRaw)
+  if (!Number.isInteger(apiTimeoutMs) || apiTimeoutMs <= 0 || apiTimeoutMs > 60000) {
+    throw new ConfigError(
+      `BFF_API_TIMEOUT_MS must be an integer in (0, 60000] ms (got: ${apiTimeoutRaw})`
+    )
+  }
+
   return {
     port,
     publicOrigin,
@@ -94,6 +106,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
     clientId: requireEnv(env, 'BFF_CLIENT_ID'),
     clientSecret: requireEnv(env, 'BFF_CLIENT_SECRET'),
     apiUpstream: requireAbsoluteUrl(env, 'BFF_API_UPSTREAM'),
+    apiTimeoutMs,
     cookieSecret,
     scopes: env.BFF_SCOPES ?? 'openid profile email',
   }

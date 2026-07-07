@@ -98,10 +98,16 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
       const { authorizationUrl, transaction } = await oidc.beginLogin()
       const txnId = txns.create({ ...transaction, returnTo, expiresAt: Date.now() + TXN_TTL_MS })
 
-      // The __Host-txn cookie is the handle to the server-side transaction. Same
-      // attributes as the session cookie, plus a 5-minute Max-Age (BCP 6.1.3.2).
+      // The __Host-txn cookie is the handle to the server-side transaction, with
+      // a 5-minute Max-Age (BCP 6.1.3.2). SameSite=Lax (not Strict like the
+      // session cookie) so the browser still sends it on the cross-site top-level
+      // navigation back from the IdP to /auth/callback, where it is consumed.
       redirect(res, authorizationUrl, [
-        serializeHostCookie(TXN_COOKIE, txnId, { httpOnly: true, maxAgeSeconds: 300 }),
+        serializeHostCookie(TXN_COOKIE, txnId, {
+          httpOnly: true,
+          maxAgeSeconds: 300,
+          sameSite: 'Lax',
+        }),
       ])
     },
 

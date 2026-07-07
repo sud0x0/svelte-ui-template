@@ -53,6 +53,12 @@ export function login(returnTo?: string): void {
     // with `state` + `nonce` and 302s to the IdP discovered via
     // .well-known/openid-configuration (bff/src/routes/auth.ts, /auth/login).
     const target = returnTo ?? location.pathname + location.search
+    // return_to is same-origin here by construction (a pathname + search from
+    // this document, or the caller's app path). The SPA deliberately does NOT
+    // validate it and must not be relied on to: the BFF is the trust boundary and
+    // re-validates it as an open-redirect guard (validateReturnTo in
+    // bff/src/routes/auth.ts). See .claude/rules/security.md rule 1: the BFF is
+    // the single validation owner.
     window.location.assign(`/auth/login?return_to=${encodeURIComponent(target)}`)
     return
   }

@@ -48,6 +48,8 @@ services:
       BFF_CLIENT_SECRET: ${BFF_CLIENT_SECRET}
       # The Go API the BFF proxies to; same host default as the SPA dev proxy.
       BFF_API_UPSTREAM: ${BFF_API_UPSTREAM:-http://host.containers.internal:8080}
+      # Upstream call timeout in ms, integer in (0, 60000], default 10000.
+      BFF_API_TIMEOUT_MS: ${BFF_API_TIMEOUT_MS:-10000}
       BFF_COOKIE_SECRET: ${BFF_COOKIE_SECRET}
       BFF_SCOPES: ${BFF_SCOPES:-openid profile email}
 

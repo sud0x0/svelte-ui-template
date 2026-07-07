@@ -22,6 +22,7 @@ function baseConfig(): BffConfig {
     clientId: 'c',
     clientSecret: 's',
     apiUpstream: 'http://upstream.test',
+    apiTimeoutMs: 10_000,
     cookieSecret: SECRET,
     scopes: 'openid',
   }
@@ -212,6 +213,29 @@ describe('authenticated proxy', () => {
     })
     expect(withToken.status).toBe(200)
     expect(h.captured).toHaveLength(1)
+  })
+
+  it('bounds the upstream call: 504 gateway_timeout on abort, fast responses unaffected', async () => {
+    // Simulate a hung upstream by rejecting with the shape AbortSignal.timeout
+    // produces (name TimeoutError), keyed off the URL so one harness serves both
+    // a fast and a slow path. No wall-clock wait.
+    const timeoutErr = Object.assign(new Error('timed out'), { name: 'TimeoutError' })
+    h = await mount({
+      respond: (rec) => {
+        if (rec.url.includes('/slow')) throw timeoutErr
+        return new Response('{"ok":true}', { status: 200 })
+      },
+    })
+    const sid = h.sessions.create(session(tokens()))
+
+    // Fast path: the timeout signal does not affect a prompt response.
+    const fast = await fetch(`${h.base}/api/fast`, { headers: { cookie: `__Host-session=${sid}` } })
+    expect(fast.status).toBe(200)
+
+    // Hung upstream aborts -> the Go 504 envelope, byte-for-byte.
+    const slow = await fetch(`${h.base}/api/slow`, { headers: { cookie: `__Host-session=${sid}` } })
+    expect(slow.status).toBe(504)
+    expect(await slow.json()).toEqual({ error: 'gateway_timeout', message: 'upstream timed out' })
   })
 
   it('rejects an unsafe /api write labelled Sec-Fetch-Site: cross-site', async () => {

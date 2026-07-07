@@ -11,7 +11,7 @@ import {
   type StoredTokens,
 } from './session.ts'
 import { clearCsrfCookie, guardUnsafeRequest } from './csrf.ts'
-import { header, cookies, unauthorised, forbidden } from './http.ts'
+import { header, cookies, sendJson, unauthorised, forbidden } from './http.ts'
 
 // The authenticated reverse proxy: /api/* -> Go API with a server-side access
 // token attached. The browser sends only its session cookie; the BFF turns that
@@ -20,6 +20,15 @@ import { header, cookies, unauthorised, forbidden } from './http.ts'
 
 /** Refresh this many ms BEFORE the access token actually expires. */
 const REFRESH_SKEW_MS = 30_000
+
+/**
+ * True when a fetch rejected because it was aborted. `AbortSignal.timeout()`
+ * rejects with a `TimeoutError` DOMException, a manual abort with `AbortError`.
+ * We treat both as "upstream too slow" (S4).
+ */
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
+}
 
 // Hop-by-hop and identity headers we must NOT forward upstream. Authorization
 // and Cookie are stripped so the browser can never smuggle its own credentials
@@ -99,8 +108,14 @@ export function createProxy(deps: ProxyDeps): Proxy {
     }
     try {
       const rotated = await refresh
-      // Persist rotated tokens (incl. the rotated refresh token) in the session.
-      sessions.update(sid, { ...session, tokens: rotated })
+      // Persist rotated tokens (incl. the rotated refresh token). Merge onto the
+      // LATEST stored session, not the pre-await snapshot, so a concurrent
+      // claims/expiry change is not clobbered (those fields are currently
+      // invariant across refresh, but this keeps the write correct). update()
+      // no-ops when the session is gone, so a session destroyed mid-flight is
+      // never resurrected.
+      const current = sessions.get(sid) ?? session
+      sessions.update(sid, { ...current, tokens: rotated })
       return rotated
     } catch {
       return null
@@ -123,14 +138,29 @@ export function createProxy(deps: ProxyDeps): Proxy {
 
     const method = req.method ?? 'GET'
     const hasBody = method !== 'GET' && method !== 'HEAD'
-    const upstream = await doFetch(`${config.apiUpstream}${req.url ?? ''}`, {
-      method,
-      headers,
-      body: hasBody ? Readable.toWeb(req) : undefined,
-      // Streaming a request body requires half-duplex mode (undici/WHATWG).
-      ...(hasBody ? { duplex: 'half' } : {}),
-      redirect: 'manual',
-    })
+
+    let upstream: Response
+    try {
+      upstream = await doFetch(`${config.apiUpstream}${req.url ?? ''}`, {
+        method,
+        headers,
+        body: hasBody ? Readable.toWeb(req) : undefined,
+        // Streaming a request body requires half-duplex mode (undici/WHATWG).
+        ...(hasBody ? { duplex: 'half' } : {}),
+        redirect: 'manual',
+        // Bound the upstream call so a hung Go API cannot pin this connection
+        // until the OS socket timeout (S4). The signal also aborts the response
+        // body stream, handled in the pipeline catch below.
+        signal: AbortSignal.timeout(config.apiTimeoutMs),
+      })
+    } catch (err) {
+      // Upstream too slow before any bytes went out: answer the Go 504 envelope.
+      // Only safe while nothing is on the wire (headers not yet sent).
+      if (isAbortError(err) && !res.headersSent) {
+        return sendJson(res, 504, { error: 'gateway_timeout', message: 'upstream timed out' })
+      }
+      throw err
+    }
 
     // Pass status and headers through UNTOUCHED (403 stays 403, etc.), minus the
     // encoding headers undici already applied.
@@ -140,7 +170,18 @@ export function createProxy(deps: ProxyDeps): Proxy {
     })
     res.writeHead(upstream.status, outHeaders)
     if (upstream.body !== null) {
-      await pipeline(Readable.fromWeb(upstream.body), res)
+      try {
+        await pipeline(Readable.fromWeb(upstream.body), res)
+      } catch (err) {
+        // Timeout fired mid-stream: the status line is already sent, so we cannot
+        // switch to a 504. Destroy the response so the client sees a broken
+        // connection rather than a silently truncated body.
+        if (isAbortError(err) && res.headersSent) {
+          res.destroy()
+          return
+        }
+        throw err
+      }
     } else {
       res.end()
     }
