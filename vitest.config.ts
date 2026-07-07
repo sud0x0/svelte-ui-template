@@ -47,11 +47,18 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
       include: ['src/**/*.{ts,svelte}'],
-      // The bootstrap, root shell, and page-level route components are exercised
-      // by the Playwright E2E suite, not unit tests — exclude them here so the
-      // unit-coverage threshold reflects the logic layer (api/stores/utils/
-      // components) it actually gates.
+      // The coverage gate is the SPA logic layer under `src/lib/` (decisions #14).
+      // In Vitest projects mode the `bff` project instruments `bff/**` too, and a
+      // root-level `include` does NOT scope those out — so `bff/**` is excluded
+      // explicitly. That is deliberate, not an omission: the BFF is a separate
+      // server component gated by its own 50 behaviour tests (`make bff-test`),
+      // the same behaviour-over-line-coverage stance decisions #14 cites for
+      // go-api-template's server code — and `bff/src/testutil/` is test
+      // scaffolding (a stub IdP) that must never be measured at all.
+      // The SPA bootstrap, root shell, and page-level routes are exercised by the
+      // Playwright E2E suite, not unit tests, so they are excluded here too.
       exclude: [
+        'bff/**',
         'src/main.ts',
         'src/App.svelte',
         'src/routes/**',
