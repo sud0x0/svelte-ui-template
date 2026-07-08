@@ -42,11 +42,19 @@ describe('BFF config', () => {
     expect(() => loadConfig({ ...BASE, BFF_ISSUER_URL: 'idp.example.com' })).toThrow(ConfigError)
   })
 
-  it('rejects a cookie secret under 32 bytes (measured in bytes, not chars)', () => {
-    // 16 two-byte characters = 32 bytes exactly is OK; one fewer is not.
+  it('rejects a cookie secret under 32 BYTES (not chars) — multibyte-aware', () => {
     expect(() => loadConfig({ ...BASE, BFF_COOKIE_SECRET: 'short' })).toThrow(/32 bytes/)
     expect(() => loadConfig({ ...BASE, BFF_COOKIE_SECRET: 'a'.repeat(31) })).toThrow(/32 bytes/)
     expect(loadConfig({ ...BASE, BFF_COOKIE_SECRET: 'a'.repeat(32) }).cookieSecret).toHaveLength(32)
+
+    // Multibyte tripwire: 'é' (U+00E9) is 1 CHAR but 2 UTF-8 BYTES. A byte→char
+    // regression (using .length) would wrongly accept a 31-byte secret and reject
+    // a valid 32-byte one, so cover both sides explicitly.
+    const e = 'é' // é (U+00E9), 1 char / 2 bytes in UTF-8
+    // 16 chars = 32 bytes -> accepted (and stored as the 16-char string).
+    expect(loadConfig({ ...BASE, BFF_COOKIE_SECRET: e.repeat(16) }).cookieSecret).toHaveLength(16)
+    // 15×2 + 1 = 31 bytes -> rejected, even though it is 16 chars long.
+    expect(() => loadConfig({ ...BASE, BFF_COOKIE_SECRET: e.repeat(15) + 'x' })).toThrow(/32 bytes/)
   })
 
   it('rejects an out-of-range port', () => {
@@ -65,5 +73,13 @@ describe('BFF config', () => {
     expect(() => loadConfig({ ...BASE, BFF_API_TIMEOUT_MS: '60001' })).toThrow(ConfigError)
     expect(() => loadConfig({ ...BASE, BFF_API_TIMEOUT_MS: '1.5' })).toThrow(ConfigError)
     expect(() => loadConfig({ ...BASE, BFF_API_TIMEOUT_MS: 'nope' })).toThrow(ConfigError)
+  })
+
+  it('leaves audience undefined when BFF_AUDIENCE is unset or blank, passes it through when set', () => {
+    expect(loadConfig(BASE).audience).toBeUndefined()
+    expect(loadConfig({ ...BASE, BFF_AUDIENCE: '   ' }).audience).toBeUndefined()
+    expect(loadConfig({ ...BASE, BFF_AUDIENCE: 'https://go-api.example.com' }).audience).toBe(
+      'https://go-api.example.com'
+    )
   })
 })

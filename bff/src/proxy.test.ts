@@ -252,4 +252,56 @@ describe('authenticated proxy', () => {
     expect(res.status).toBe(403)
     expect(h.captured).toHaveLength(0)
   })
+
+  it('strips an upstream Set-Cookie so it can never reach the browser (item 7)', async () => {
+    // A hostile/misbehaving upstream tries to overwrite the session cookie.
+    h = await mount({
+      respond: () =>
+        new Response('{"ok":true}', {
+          status: 200,
+          headers: { 'set-cookie': '__Host-session=evil; Path=/' },
+        }),
+    })
+    const sid = h.sessions.create(session(tokens()))
+    const res = await fetch(`${h.base}/api/v1/logs`, {
+      headers: { cookie: `__Host-session=${sid}` },
+    })
+    expect(res.status).toBe(200)
+    // The BFF response carries NO set-cookie — the proxy owns cookies, not upstream.
+    expect(res.headers.get('set-cookie')).toBeNull()
+    expect(res.headers.getSetCookie()).toHaveLength(0)
+  })
+
+  it('answers 502 bad_gateway on a non-timeout upstream failure, without crashing', async () => {
+    // undici surfaces ECONNREFUSED / DNS failure / connection reset as a TypeError.
+    h = await mount({
+      respond: () => {
+        throw new TypeError('fetch failed')
+      },
+    })
+    const sid = h.sessions.create(session(tokens()))
+    const res = await fetch(`${h.base}/api/v1/logs`, {
+      headers: { cookie: `__Host-session=${sid}` },
+    })
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ error: 'bad_gateway', message: 'upstream unavailable' })
+  })
+
+  it('destroys the socket when the upstream body fails mid-stream (headers already sent)', async () => {
+    // A 200 whose body errors after the first chunk: the status line is already on
+    // the wire, so the proxy cannot switch to a 5xx and must break the connection.
+    const brokenBody = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"partial":'))
+        controller.error(new Error('upstream reset mid-stream'))
+      },
+    })
+    h = await mount({ respond: () => new Response(brokenBody, { status: 200 }) })
+    const sid = h.sessions.create(session(tokens()))
+    await expect(
+      fetch(`${h.base}/api/v1/logs`, { headers: { cookie: `__Host-session=${sid}` } }).then((r) =>
+        r.text()
+      )
+    ).rejects.toThrow()
+  })
 })

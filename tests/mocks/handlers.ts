@@ -11,18 +11,24 @@ export const handlers = [
 
   // The reference authenticated resource. Individual tests override with
   // worker.use(...) to exercise the empty / 403 / error states.
-  http.get('/api/v1/logs', () =>
-    HttpResponse.json({
-      logs: [
-        {
-          id: 'log-1',
-          user_id: 'u-test',
-          date_and_time: '2026-07-07T09:00:00Z',
-          log: 'reference log entry',
-          created_at: '2026-07-07T09:00:00Z',
-          updated_at: '2026-07-07T09:00:00Z',
-        },
-      ],
-    })
-  ),
+  //
+  // Mirrors the REAL Go API contract (userlog_handler.go): the response shape is
+  // chosen by the PRESENCE of `?cursor`. With a cursor -> the wrapped
+  // `{ logs, next_cursor? }`; WITHOUT one -> offset mode returns a BARE ARRAY.
+  // The client always sends `cursor`; returning a bare array for a cursor-less
+  // request keeps the mock honest so the item-1 regression cannot hide again.
+  http.get('/api/v1/logs', ({ request }) => {
+    const entry = {
+      id: 'log-1',
+      user_id: 'u-test',
+      date_and_time: '2026-07-07T09:00:00Z',
+      log: 'reference log entry',
+      created_at: '2026-07-07T09:00:00Z',
+      updated_at: '2026-07-07T09:00:00Z',
+    }
+    if (!new URL(request.url).searchParams.has('cursor')) {
+      return HttpResponse.json([entry]) // offset mode: bare array
+    }
+    return HttpResponse.json({ logs: [entry] }) // cursor mode: wrapped
+  }),
 ]

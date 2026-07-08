@@ -1,4 +1,4 @@
-import { createServer, type RequestListener, type Server } from 'node:http'
+import { createServer, type RequestListener, type Server, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { loadConfig, type BffConfig } from './config.ts'
@@ -16,6 +16,37 @@ export interface AppDeps {
   config: BffConfig
   authRoutes: AuthRoutes
   proxy: Proxy
+}
+
+/**
+ * Answers a 500 envelope (or destroys the socket if the response is already in
+ * flight) and logs — WITHOUT the offending value, which may hold tokens/PII.
+ * The last line of defence so a handler bug degrades one request, not the process.
+ */
+function onHandlerError(res: ServerResponse, err: unknown): void {
+  console.error('bff handler error:', err instanceof Error ? err.message : 'unknown')
+  if (res.headersSent) {
+    res.destroy()
+    return
+  }
+  sendJson(res, 500, { error: 'internal', message: 'internal server error' })
+}
+
+/**
+ * Invokes a route handler and contains ANY failure — a synchronous throw OR a
+ * rejected promise (handlers dispatched as `void handler()` would otherwise leak
+ * an unhandledRejection and crash the BFF, e.g. an undici TypeError on an upstream
+ * reset). Every failure answers a 500 instead.
+ */
+function dispatch(res: ServerResponse, handler: () => void | Promise<void>): void {
+  try {
+    const result = handler()
+    if (result instanceof Promise) {
+      result.catch((err: unknown) => onHandlerError(res, err))
+    }
+  } catch (err) {
+    onHandlerError(res, err)
+  }
 }
 
 /**
@@ -38,16 +69,19 @@ export function createApp(deps: AppDeps): RequestListener {
       console.log(`${method} ${path} ${res.statusCode} ${ms}ms`)
     })
 
-    if (path === '/auth/login' && method === 'GET') return void authRoutes.login(req, res)
-    if (path === '/auth/callback' && method === 'GET') return void authRoutes.callback(req, res)
-    if (path === '/auth/logout' && method === 'POST') return void authRoutes.logout(req, res)
-    if (path === '/auth/me' && method === 'GET') return void authRoutes.me(req, res)
+    if (path === '/auth/login' && method === 'GET')
+      return dispatch(res, () => authRoutes.login(req, res))
+    if (path === '/auth/callback' && method === 'GET')
+      return dispatch(res, () => authRoutes.callback(req, res))
+    if (path === '/auth/logout' && method === 'POST')
+      return dispatch(res, () => authRoutes.logout(req, res))
+    if (path === '/auth/me' && method === 'GET') return dispatch(res, () => authRoutes.me(req, res))
 
     if (path === '/health' || path === '/livez' || path === '/readyz') {
-      return void proxy.health(req, res)
+      return dispatch(res, () => proxy.health(req, res))
     }
     if (path === '/api' || path.startsWith('/api/')) {
-      return void proxy.api(req, res)
+      return dispatch(res, () => proxy.api(req, res))
     }
 
     sendJson(res, 404, { error: 'not_found', message: 'no such route' })

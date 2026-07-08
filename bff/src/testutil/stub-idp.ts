@@ -36,6 +36,10 @@ export interface StubIdp {
   tamperNonce: boolean
   /** Number of successful token-endpoint exchanges (login + refresh). */
   tokenHits: number
+  /** Query params of the most recent /authorize request (lets tests assert e.g. `audience`). */
+  lastAuthorizeQuery: URLSearchParams | null
+  /** Body params of the most recent /token request (lets tests assert e.g. `audience`). */
+  lastTokenBody: URLSearchParams | null
   close(): Promise<void>
 }
 
@@ -64,6 +68,8 @@ export async function startStubIdp(): Promise<StubIdp> {
     },
     tamperNonce: false,
     tokenHits: 0,
+    lastAuthorizeQuery: null,
+    lastTokenBody: null,
     close: async () => {},
   }
 
@@ -114,6 +120,7 @@ export async function startStubIdp(): Promise<StubIdp> {
       }
 
       if (path === '/authorize') {
+        state.lastAuthorizeQuery = url.searchParams
         // Record the challenge + nonce keyed by a fresh code, then 302 back.
         const code = randomBytes(16).toString('hex')
         codes.set(code, {
@@ -130,6 +137,7 @@ export async function startStubIdp(): Promise<StubIdp> {
 
       if (path === '/token' && req.method === 'POST') {
         const params = new URLSearchParams(await readBody(req))
+        state.lastTokenBody = params
         const grantType = params.get('grant_type')
 
         // Confidential-client auth: client_secret_post. A wrong secret is

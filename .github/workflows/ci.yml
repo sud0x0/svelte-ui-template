@@ -65,8 +65,15 @@ jobs:
 
       # Fail the build on high/critical CVEs in the production dependency tree.
       # Mirrors `make audit` and the pnpm-audit pre-commit hook.
-      - name: Audit dependencies
+      - name: Audit dependencies (production, blocking)
         run: pnpm audit --prod --audit-level high
+
+      # Non-blocking full-tree audit: surfaces CVEs in the BUILD TOOLCHAIN
+      # (dev-dependencies) without failing the PR. Advisory only — the blocking
+      # gate above is the production tree.
+      - name: Audit dependencies (full tree, advisory)
+        continue-on-error: true
+        run: pnpm audit
 
       - name: Generate MSW worker
         run: pnpm exec msw init tests/public --no-save
@@ -97,6 +104,13 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # Enforce the CSP guarantee in CI, not just the manual `make csp-check`:
+      # loads the built bundle in a real browser and fails on any CSP violation,
+      # so a `script-src 'self'` regression fails the PR. Reuses the chromium
+      # installed above.
+      - name: CSP check (script-src 'self' in a real browser)
+        run: make csp-check
 
       - name: Bundle-size budget
         run: node scripts/check-bundle-size.mjs

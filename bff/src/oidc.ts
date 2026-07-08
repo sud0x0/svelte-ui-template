@@ -37,11 +37,24 @@ export interface CreateOidcOptions {
   allowInsecure?: boolean
 }
 
+/**
+ * Access-token lifetime (seconds) to assume when the IdP omits `expires_in`.
+ * Conservative on purpose (item 8): mapping a missing `expires_in` to 0 would set
+ * the expiry to "now", so the very next request treats the token as expired and
+ * forces an immediate refresh — or, if no refresh token was issued, a 401 loop
+ * right after login. 300s gives the token a sane usable window.
+ */
+export const DEFAULT_ACCESS_TOKEN_LIFETIME_S = 300
+
+/** Absolute access-token expiry (epoch ms) from an optional `expires_in`. */
+export function accessTokenExpiryMs(expiresInSeconds: number | undefined, nowMs: number): number {
+  return nowMs + (expiresInSeconds ?? DEFAULT_ACCESS_TOKEN_LIFETIME_S) * 1000
+}
+
 function toStoredTokens(
   tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,
   fallback: Partial<StoredTokens> = {}
 ): StoredTokens {
-  const expiresInSeconds = tokens.expiresIn() ?? 0
   return {
     accessToken: tokens.access_token,
     // Rotation (RFC 9700 §4.14): prefer a freshly issued refresh token; keep the
@@ -50,7 +63,7 @@ function toStoredTokens(
     // A refresh response often omits the id_token — keep the prior one so logout
     // still has an id_token_hint.
     idToken: tokens.id_token ?? fallback.idToken,
-    accessTokenExpiresAt: Date.now() + expiresInSeconds * 1000,
+    accessTokenExpiresAt: accessTokenExpiryMs(tokens.expiresIn(), Date.now()),
   }
 }
 
@@ -73,6 +86,13 @@ export async function createOidc(
     options.allowInsecure ? { execute: [client.allowInsecureRequests] } : undefined
   )
 
+  // When an audience is configured, send it as the `audience` request parameter
+  // on BOTH the authorization request and every token/refresh grant, so the IdP
+  // mints an access token whose `aud` the Go API accepts (item 3). Undefined when
+  // unset, so openid-client sends nothing extra.
+  const audienceParam: Record<string, string> | undefined =
+    config.audience !== undefined ? { audience: config.audience } : undefined
+
   return {
     async beginLogin() {
       // PKCE (RFC 7636) is used EVEN THOUGH this is a confidential client:
@@ -88,6 +108,7 @@ export async function createOidc(
         code_challenge_method: 'S256',
         state,
         nonce,
+        ...audienceParam,
       })
       return {
         authorizationUrl: authorizationUrl.href,
@@ -98,12 +119,18 @@ export async function createOidc(
     async completeLogin(currentUrl, txn) {
       // openid-client validates `state` (against expectedState), the PKCE
       // verifier, the ID-token signature/iss/aud/exp, and `nonce` (against
-      // expectedNonce) — throwing on any mismatch.
-      const tokens = await client.authorizationCodeGrant(configuration, new URL(currentUrl), {
-        pkceCodeVerifier: txn.codeVerifier,
-        expectedState: txn.state,
-        expectedNonce: txn.nonce,
-      })
+      // expectedNonce) — throwing on any mismatch. `audienceParam` (when set) is
+      // sent as an extra token-endpoint parameter.
+      const tokens = await client.authorizationCodeGrant(
+        configuration,
+        new URL(currentUrl),
+        {
+          pkceCodeVerifier: txn.codeVerifier,
+          expectedState: txn.state,
+          expectedNonce: txn.nonce,
+        },
+        audienceParam
+      )
       const claims = tokens.claims()
       if (claims === undefined) {
         throw new Error('authorization server returned no id_token')
@@ -115,7 +142,11 @@ export async function createOidc(
       if (previous.refreshToken === undefined) {
         throw new Error('no refresh token available')
       }
-      const tokens = await client.refreshTokenGrant(configuration, previous.refreshToken)
+      const tokens = await client.refreshTokenGrant(
+        configuration,
+        previous.refreshToken,
+        audienceParam
+      )
       return toStoredTokens(tokens, previous)
     },
 

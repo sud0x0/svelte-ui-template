@@ -194,16 +194,17 @@ XSS cannot exfiltrate one.
 
 ### The BFF's environment (`BFF_*` — server-side, never in the bundle)
 
-| Variable            | Default                 | Purpose                                                                                                       |
-| ------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `BFF_PORT`          | `8081`                  | TCP port the BFF listens on.                                                                                  |
-| `BFF_PUBLIC_ORIGIN` | _(required)_            | Absolute public origin the browser reaches the BFF on. `redirect_uri` is derived as `<origin>/auth/callback`. |
-| `BFF_ISSUER_URL`    | _(required)_            | OIDC issuer URL for discovery (`<issuer>/.well-known/openid-configuration`).                                  |
-| `BFF_CLIENT_ID`     | _(required)_            | OAuth `client_id` registered at the IdP.                                                                      |
-| `BFF_CLIENT_SECRET` | _(required)_            | OAuth `client_secret`. **Confidential client** (BCP §6.1.3.1) — server-side only.                             |
-| `BFF_API_UPSTREAM`  | _(required)_            | Base URL of the Go API the BFF proxies `/api/*` to.                                                           |
-| `BFF_COOKIE_SECRET` | _(required, ≥32 bytes)_ | HMAC key for the signed double-submit CSRF token (security.md rule 2).                                        |
-| `BFF_SCOPES`        | `openid profile email`  | Space-delimited OIDC scopes.                                                                                  |
+| Variable            | Default                 | Purpose                                                                                                                                                                                                                                                                                              |
+| ------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BFF_PORT`          | `8081`                  | TCP port the BFF listens on.                                                                                                                                                                                                                                                                         |
+| `BFF_PUBLIC_ORIGIN` | _(required)_            | Absolute public origin the browser reaches the BFF on. `redirect_uri` is derived as `<origin>/auth/callback`.                                                                                                                                                                                        |
+| `BFF_ISSUER_URL`    | _(required)_            | OIDC issuer URL for discovery (`<issuer>/.well-known/openid-configuration`).                                                                                                                                                                                                                         |
+| `BFF_CLIENT_ID`     | _(required)_            | OAuth `client_id` registered at the IdP.                                                                                                                                                                                                                                                             |
+| `BFF_CLIENT_SECRET` | _(required)_            | OAuth `client_secret`. **Confidential client** (BCP §6.1.3.1) — server-side only.                                                                                                                                                                                                                    |
+| `BFF_API_UPSTREAM`  | _(required)_            | Base URL of the Go API the BFF proxies `/api/*` to.                                                                                                                                                                                                                                                  |
+| `BFF_COOKIE_SECRET` | _(required, ≥32 bytes)_ | HMAC key for the signed double-submit CSRF token (security.md rule 2).                                                                                                                                                                                                                               |
+| `BFF_SCOPES`        | `openid profile email`  | Space-delimited OIDC scopes.                                                                                                                                                                                                                                                                         |
+| `BFF_AUDIENCE`      | _(optional, unset)_     | Access-token audience. When set, sent as the `audience` param on the authorization request and token/refresh grants so the IdP mints an access token whose `aud` the Go API accepts. **MUST equal the Go API's `OIDC_AUDIENCE`.** Leave unset if the IdP sets the access-token audience server-side. |
 
 ### IdP setup checklist
 
@@ -226,11 +227,29 @@ check. The **ID token is never an API credential** — it is never sent to `/api
 
 ### Pairing with the Go API
 
-The Go API (`go-api-template`, commit `dfb53b4`) is **unchanged and
+The Go API (`go-api-template`, commit `640994e`) is **unchanged and
 pattern-agnostic** — it just validates the bearer the BFF attaches. Make its
-`OIDC_ISSUER_URL` / `OIDC_AUDIENCE` match what the IdP mints for this client. In
-this same-origin BFF topology the Go CORS middleware can be removed (its own
-comment says so) — the browser never calls the Go API cross-origin.
+`OIDC_ISSUER_URL` / `OIDC_AUDIENCE` match what the IdP mints for this client (set
+`BFF_AUDIENCE` to that same `OIDC_AUDIENCE`). In this same-origin BFF topology the
+Go CORS middleware can be removed (its own comment says so) — the browser never
+calls the Go API cross-origin.
+
+That commit also adds **ABAC cross-user access** on the Go side: an authorised
+caller can read another user's rows via `?user=<uuid>`, gated by an OPA policy.
+**This SPA does not use that parameter and never sends it.** It is noted only so
+you know the capability exists server-side.
+
+**Health check endpoint.** [`src/lib/api/health.ts`](src/lib/api/health.ts) calls
+`GET /health`, which the Go API serves publicly ONLY when `PUBLIC_READINESS=true`.
+If you keep the SPA health check pointed at `/health`, set `PUBLIC_READINESS=true`
+on the Go API. The always-public `/livez` is the alternative endpoint if you would
+rather not expose readiness.
+
+**Two user identifiers, never comparable.** `CurrentUser.id` from `/auth/me` is the
+RAW IdP `sub`. The Go API's `Log.user_id` is a `UUIDv5(namespace, iss|sub)` derived
+from that same subject. They identify the same person but are DIFFERENT strings, so
+never compare them for row ownership. Ownership is decided server-side by the Go API
+from the bearer, never by the SPA.
 
 > **Lockstep with the Go API:** the BFF resolves the user; the Go API sets the UUID
 > via `shared.WithUserID` at the **`r.Route("/api/v1", …)`** block in
@@ -403,6 +422,14 @@ caddy run --config Caddyfile
 `tls internal`, delete the `http://{$SITE_ADDRESS}` redirect block, and run
 `caddy trust` on each client to install the local CA root.
 
+**Serving without Caddy:** the tarball's security posture assumes the bundled
+`Caddyfile` sets the response headers. The `<meta>` CSP in `index.html` enforces
+most of the policy under any static host, but a `<meta>` tag CANNOT deliver
+`frame-ancestors`, `X-Frame-Options`, or `Strict-Transport-Security` (the first is
+ignored inside `<meta>` by spec, the other two are HTTP response headers a document
+cannot set). A non-Caddy static host therefore MUST send those three headers
+itself, or it loses clickjacking and HSTS protection.
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every PR and push
@@ -412,8 +439,9 @@ to `main`, in three jobs:
   prettier, svelte-check) so the local hooks are mandatory server-side too; they
   are skippable locally via `git commit --no-verify`, not here.
 - **`test`** — `eslint` → `prettier --check` → type-check → script tests →
-  install chromium → Vitest (with coverage) → `vite build` → bundle-size budget
-  → Playwright E2E. Coverage and the Playwright report upload as artifacts.
+  install chromium → Vitest (with coverage) → `vite build` → **CSP check**
+  (`make csp-check` proves `script-src 'self'` in a real browser) → bundle-size
+  budget → Playwright E2E. Coverage and the Playwright report upload as artifacts.
 - **`release-validate`** — dry-runs the release packaging (`make prod-bundle`)
   and confirms the CHANGELOG is extractable, so release breakage surfaces on the
   PR rather than at tag time.

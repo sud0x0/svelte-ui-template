@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   createSessionStore,
+  createTxnStore,
+  startUnrefInterval,
   serializeHostCookie,
   clearHostCookie,
   parseCookies,
   SESSION_COOKIE,
   TXN_COOKIE,
   type SessionData,
+  type LoginTransaction,
 } from './session.ts'
 
 function sampleSession(overrides: Partial<SessionData> = {}): SessionData {
@@ -17,6 +20,13 @@ function sampleSession(overrides: Partial<SessionData> = {}): SessionData {
     ...overrides,
   }
 }
+
+function sampleTxn(overrides: Partial<LoginTransaction> = {}): LoginTransaction {
+  return { state: 's', nonce: 'n', codeVerifier: 'v', returnTo: '/', expiresAt: 0, ...overrides }
+}
+
+// A no-op scheduler so a store under test creates NO real timer.
+const noSweep = (): void => {}
 
 describe('session cookie contract (BCP 6.1.3.2)', () => {
   it('serializes the session cookie with the exact required attributes', () => {
@@ -114,5 +124,65 @@ describe('in-memory session store', () => {
     const id = store.create(sampleSession({ expiresAt: 0 }))
     // Still alive at now, gone after ttl.
     expect(store.get(id)).toBeDefined()
+  })
+})
+
+describe('store memory bounding (item 4)', () => {
+  it('sweeps expired sessions WITHOUT any lookup', () => {
+    let clock = 1000
+    let sweep: () => void = () => {}
+    const store = createSessionStore({
+      now: () => clock,
+      startSweep: (fn) => {
+        sweep = fn
+      },
+    })
+    store.create(sampleSession({ expiresAt: 2000 }))
+    store.create(sampleSession({ expiresAt: 9000 }))
+    expect(store.size()).toBe(2)
+
+    clock = 2001
+    sweep() // periodic sweep — no get() call drives this eviction
+    expect(store.size()).toBe(1)
+  })
+
+  it('caps live sessions by evicting the oldest', () => {
+    const store = createSessionStore({ maxEntries: 3, now: () => 1000, startSweep: noSweep })
+    const ids = Array.from({ length: 4 }, () => store.create(sampleSession({ expiresAt: 10_000 })))
+    expect(store.size()).toBe(3)
+    expect(store.get(ids[0])).toBeUndefined() // oldest evicted by the cap
+    expect(store.get(ids[3])).toBeDefined() // newest kept (not expired at now=1000)
+  })
+
+  it('sweeps expired transactions WITHOUT any lookup', () => {
+    let clock = 1000
+    let sweep: () => void = () => {}
+    const store = createTxnStore({
+      now: () => clock,
+      startSweep: (fn) => {
+        sweep = fn
+      },
+    })
+    store.create(sampleTxn({ expiresAt: 2000 }))
+    store.create(sampleTxn({ expiresAt: 9000 }))
+    expect(store.size()).toBe(2)
+
+    clock = 2001
+    sweep() // no consume() call drives this eviction
+    expect(store.size()).toBe(1)
+  })
+
+  it('caps live transactions by evicting the oldest', () => {
+    const store = createTxnStore({ maxEntries: 2, startSweep: noSweep })
+    store.create(sampleTxn({ expiresAt: 9000 }))
+    store.create(sampleTxn({ expiresAt: 9000 }))
+    store.create(sampleTxn({ expiresAt: 9000 })) // exceeds cap 2 -> oldest evicted
+    expect(store.size()).toBe(2)
+  })
+
+  it('startUnrefInterval schedules an unref-ed timer so the process can exit', () => {
+    const timer = startUnrefInterval(() => {}, 60_000)
+    expect(timer.hasRef()).toBe(false)
+    clearInterval(timer)
   })
 })

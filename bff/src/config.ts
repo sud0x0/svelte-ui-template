@@ -37,6 +37,15 @@ export interface BffConfig {
   cookieSecret: string
   /** Space-delimited OIDC scopes. */
   scopes: string
+  /**
+   * Optional access-token audience. When set, it is sent as the `audience`
+   * request parameter on the authorization request and the token + refresh
+   * grants, so the IdP mints an access token whose `aud` the Go API accepts
+   * (it 401s any bearer whose `aud` != its OIDC_AUDIENCE). MUST equal the Go
+   * API's OIDC_AUDIENCE. Leave unset if the IdP sets the access-token audience
+   * server-side instead. Undefined when `BFF_AUDIENCE` is absent/empty.
+   */
+  audience?: string
 }
 
 function requireEnv(env: NodeJS.ProcessEnv, key: string): string {
@@ -96,6 +105,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
     )
   }
 
+  // Optional: only include when non-empty so `audience` is genuinely undefined
+  // (not an empty string) when unset, and the OIDC layer can branch on presence.
+  const audience = env.BFF_AUDIENCE?.trim()
+
   return {
     port,
     publicOrigin,
@@ -109,5 +122,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
     apiTimeoutMs,
     cookieSecret,
     scopes: env.BFF_SCOPES ?? 'openid profile email',
+    ...(audience ? { audience } : {}),
   }
 }

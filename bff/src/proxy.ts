@@ -50,12 +50,19 @@ const STRIP_REQUEST_HEADERS = new Set([
 // Response headers that describe the ON-THE-WIRE encoding of the upstream body.
 // undici's fetch already decoded the body, so re-emitting these would make the
 // browser try to decode again. Strip them; Node re-frames the response.
+//
+// `set-cookie` is ALSO stripped (item 7): the BFF owns the browser's cookies
+// (__Host-session / csrf). An upstream Set-Cookie must NEVER reach the browser
+// through the authenticated proxy — otherwise a compromised or misbehaving Go API
+// could overwrite the session/CSRF cookies. Cookie management is the BFF's job
+// alone (security.md — the proxy strips inbound credentials and attaches its own).
 const STRIP_RESPONSE_HEADERS = new Set([
   'content-encoding',
   'content-length',
   'transfer-encoding',
   'connection',
   'keep-alive',
+  'set-cookie',
 ])
 
 export interface ProxyDeps {
@@ -154,12 +161,20 @@ export function createProxy(deps: ProxyDeps): Proxy {
         signal: AbortSignal.timeout(config.apiTimeoutMs),
       })
     } catch (err) {
-      // Upstream too slow before any bytes went out: answer the Go 504 envelope.
-      // Only safe while nothing is on the wire (headers not yet sent).
-      if (isAbortError(err) && !res.headersSent) {
+      // The upstream call failed before any bytes went out. NEVER re-throw: an
+      // unhandled rejection here crashes the whole BFF process. Answer a Go-style
+      // envelope instead — a timeout is 504, and ANY other failure (ECONNREFUSED
+      // while the Go API restarts, DNS failure, a connection reset surfacing as an
+      // undici TypeError) is 502 bad_gateway. If headers are somehow already on
+      // the wire we cannot change the status, so destroy the socket.
+      if (res.headersSent) {
+        res.destroy()
+        return
+      }
+      if (isAbortError(err)) {
         return sendJson(res, 504, { error: 'gateway_timeout', message: 'upstream timed out' })
       }
-      throw err
+      return sendJson(res, 502, { error: 'bad_gateway', message: 'upstream unavailable' })
     }
 
     // Pass status and headers through UNTOUCHED (403 stays 403, etc.), minus the
@@ -172,15 +187,13 @@ export function createProxy(deps: ProxyDeps): Proxy {
     if (upstream.body !== null) {
       try {
         await pipeline(Readable.fromWeb(upstream.body), res)
-      } catch (err) {
-        // Timeout fired mid-stream: the status line is already sent, so we cannot
-        // switch to a 504. Destroy the response so the client sees a broken
-        // connection rather than a silently truncated body.
-        if (isAbortError(err) && res.headersSent) {
-          res.destroy()
-          return
-        }
-        throw err
+      } catch {
+        // A failure mid-stream (timeout, or the upstream connection resetting):
+        // the status line is already on the wire, so we cannot switch to a
+        // 502/504. Destroy the socket so the client sees a broken connection
+        // rather than a silently truncated body. Never re-throw (would crash).
+        res.destroy()
+        return
       }
     } else {
       res.end()

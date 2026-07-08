@@ -42,22 +42,72 @@ export interface SessionStore {
   size(): number
 }
 
+/** Scheduler signature for the periodic sweep (injectable so tests avoid real timers). */
+export type SweepScheduler = (sweep: () => void, intervalMs: number) => void
+
 export interface SessionStoreOptions {
   /** Absolute session lifetime in ms (default 12h). */
   ttlMs?: number
   /** Injectable clock for deterministic tests. */
   now?: () => number
+  /** Hard cap on live sessions; the OLDEST is evicted when a new one would exceed it. */
+  maxEntries?: number
+  /** Interval (ms) of the periodic expiry sweep (default 60s). */
+  sweepIntervalMs?: number
+  /** Injectable sweep scheduler (tests capture the sweep to trigger it deterministically). */
+  startSweep?: SweepScheduler
 }
 
 const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000
+/** Default periodic expiry-sweep interval for both stores. */
+const DEFAULT_SWEEP_INTERVAL_MS = 60_000
+// Hard caps bound memory against an unauthenticated flood (item 4). Sessions are
+// created only AFTER a full login; txns are created by the UNAUTHENTICATED
+// /auth/login, so the txn cap is the tighter DoS backstop.
+const DEFAULT_MAX_SESSIONS = 100_000
+const DEFAULT_MAX_TXNS = 10_000
+
+/**
+ * Schedules `cb` every `intervalMs` and `.unref()`s the timer so this periodic
+ * housekeeping NEVER keeps the Node process alive or blocks a clean shutdown.
+ * The default sweep scheduler for both stores; tests inject their own to trigger
+ * the sweep deterministically without creating a real timer.
+ */
+export function startUnrefInterval(cb: () => void, intervalMs: number): NodeJS.Timeout {
+  const timer = setInterval(cb, intervalMs)
+  timer.unref()
+  return timer
+}
+
+/** Deletes the oldest entry of an insertion-ordered Map (used to enforce the cap). */
+function evictOldest<V>(store: Map<string, V>): void {
+  for (const key of store.keys()) {
+    store.delete(key)
+    return
+  }
+}
 
 export function createSessionStore(opts: SessionStoreOptions = {}): SessionStore {
   const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS
   const now = opts.now ?? Date.now
+  const maxEntries = opts.maxEntries ?? DEFAULT_MAX_SESSIONS
+  const startSweep = opts.startSweep ?? startUnrefInterval
   const store = new Map<string, SessionData>()
+
+  // Periodic sweep so EXPIRED entries are dropped even when their id is never
+  // looked up again — lazy eviction on get() alone lets dead sessions accumulate
+  // without bound (item 4).
+  startSweep(() => {
+    const t = now()
+    for (const [id, data] of store) {
+      if (data.expiresAt <= t) store.delete(id)
+    }
+  }, opts.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS)
 
   return {
     create(data) {
+      // Hard cap: evict the oldest before inserting so memory stays bounded.
+      if (store.size >= maxEntries) evictOldest(store)
       // 256 bits of CSPRNG entropy, base64url so it is cookie-safe with no
       // encoding. An unguessable id is the session's only secret on the wire.
       const id = randomBytes(32).toString('base64url')
@@ -111,11 +161,35 @@ export interface TxnStore {
   size(): number
 }
 
-export function createTxnStore(opts: { now?: () => number } = {}): TxnStore {
+export interface TxnStoreOptions {
+  /** Injectable clock for deterministic tests. */
+  now?: () => number
+  /** Hard cap on live transactions; the OLDEST is evicted when a new one would exceed it. */
+  maxEntries?: number
+  /** Interval (ms) of the periodic expiry sweep (default 60s). */
+  sweepIntervalMs?: number
+  /** Injectable sweep scheduler (tests capture the sweep to trigger it deterministically). */
+  startSweep?: SweepScheduler
+}
+
+export function createTxnStore(opts: TxnStoreOptions = {}): TxnStore {
   const now = opts.now ?? Date.now
+  const maxEntries = opts.maxEntries ?? DEFAULT_MAX_TXNS
+  const startSweep = opts.startSweep ?? startUnrefInterval
   const store = new Map<string, LoginTransaction>()
+
+  // The UNAUTHENTICATED /auth/login creates one txn per hit, so this is the
+  // primary memory-DoS surface: sweep expired txns and cap the total (item 4).
+  startSweep(() => {
+    const t = now()
+    for (const [id, txn] of store) {
+      if (txn.expiresAt <= t) store.delete(id)
+    }
+  }, opts.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS)
+
   return {
     create(txn) {
+      if (store.size >= maxEntries) evictOldest(store)
       const id = randomBytes(32).toString('base64url')
       store.set(id, txn)
       return id

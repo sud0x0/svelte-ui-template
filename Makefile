@@ -167,11 +167,12 @@ ci:
 	@echo "✓ ci passed (lint, format, types, unit tests, build + size)."
 
 # Umbrella 2 — verify. The full pre-commit gate: ci plus the Playwright E2E
-# suite. Composes ci + test-e2e — no command string duplicated. NEEDS browsers.
+# suite plus the real-browser CSP proof. Composes ci + test-e2e + csp-check — no
+# command string duplicated. NEEDS browsers/chromium.
 verify:
-	@$(MAKE) --no-print-directory ci test-e2e
+	@$(MAKE) --no-print-directory ci test-e2e csp-check
 	@echo ""
-	@echo "✓ verify passed (ci + e2e)."
+	@echo "✓ verify passed (ci + e2e + csp)."
 
 # Race-free unit + component tests in real-browser Vitest. The canonical unit
 # suite. NEEDS chromium.

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Force bff mode for this whole file (hoisted above the imports below by Vitest).
 //
@@ -28,15 +28,28 @@ vi.mock('../../src/lib/api/auth', () => ({
 }))
 
 import { render } from 'vitest-browser-svelte'
+import { page } from 'vitest/browser'
 import { http, HttpResponse } from 'msw'
 import { worker } from '../mocks/setup'
 import { login } from '../../src/lib/api/auth'
+import { clearAuthUser } from '../../src/lib/stores/auth.svelte'
 import GuardHarness from './fixtures/GuardHarness.svelte'
 
+// The real Go/BFF 401 envelope for /auth/me (see bff/src/http.ts `unauthorised`).
+const UNAUTHORISED_401 = () =>
+  HttpResponse.json({ error: 'unauthorised', message: 'no active session' }, { status: 401 })
+
 describe('RouteGuard (bff mode, real client 401 seam)', () => {
-  it('hands off to login exactly once with the captured returnTo on a 401 from /auth/me', async () => {
-    worker.use(http.get('/auth/me', () => new HttpResponse(null, { status: 401 })))
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // The auth store is a module-level singleton; reset it to 'idle' so each
+    // test's guard effect actually re-resolves through its own MSW handler.
+    clearAuthUser()
     history.replaceState({}, '', '/secret?ref=1')
+  })
+
+  it('hands off to login exactly once with the captured returnTo on a 401 from /auth/me', async () => {
+    worker.use(http.get('/auth/me', UNAUTHORISED_401))
 
     render(GuardHarness)
 
@@ -44,5 +57,33 @@ describe('RouteGuard (bff mode, real client 401 seam)', () => {
     // the current location. Exactly one owner => exactly one hand-off.
     await vi.waitFor(() => expect(login).toHaveBeenCalledWith('/secret?ref=1'))
     expect(login).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the "Redirecting to sign in…" notice on a 401 (redirect genuinely in flight)', async () => {
+    worker.use(http.get('/auth/me', UNAUTHORISED_401))
+
+    render(GuardHarness)
+
+    await expect.element(page.getByText(/redirecting to sign in/i)).toBeVisible()
+  })
+
+  it('on a backend error (502) shows a real error + Retry, does NOT claim to redirect, and never calls login', async () => {
+    worker.use(
+      http.get('/auth/me', () => HttpResponse.json({ error: 'bad_gateway' }, { status: 502 }))
+    )
+
+    render(GuardHarness)
+
+    // Real error surface with a Retry action — never the fake "Redirecting…".
+    await expect.element(page.getByRole('button', { name: /retry/i })).toBeVisible()
+    await expect.element(page.getByText(/couldn't reach the server/i)).toBeVisible()
+    expect(page.getByText(/redirecting to sign in/i).elements()).toHaveLength(0)
+    // A 502 is not a 401, so the client's login seam must NOT fire.
+    expect(login).not.toHaveBeenCalled()
+
+    // Retry re-resolves; once the backend recovers, the guarded content renders.
+    worker.use(http.get('/auth/me', () => HttpResponse.json({ id: 'u', displayName: 'U' })))
+    await page.getByRole('button', { name: /retry/i }).click()
+    await expect.element(page.getByTestId('guarded')).toBeVisible()
   })
 })

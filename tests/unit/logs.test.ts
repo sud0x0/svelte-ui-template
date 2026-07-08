@@ -39,6 +39,28 @@ describe('listLogs', () => {
     expect(new URL(requestUrl!).searchParams.get('limit')).toBe('5')
   })
 
+  // Tripwire for item 1 (proven live break): the Go API returns a BARE ARRAY when
+  // `?cursor` is absent, which the boundary guard rejects. The client MUST always
+  // send `cursor` (empty = first page) to get the wrapped `{ logs, next_cursor? }`.
+  // This test drives the mock to mirror the real contract and fails if listLogs
+  // ever issues a cursor-less request again.
+  it('ALWAYS sends the cursor param (empty = first page), so the API never returns a bare array', async () => {
+    let hadCursor: boolean | undefined
+    worker.use(
+      http.get('/api/v1/logs', ({ request }) => {
+        const params = new URL(request.url).searchParams
+        hadCursor = params.has('cursor')
+        // Mirror the real API: bare array without cursor, wrapped with cursor.
+        if (!hadCursor) return HttpResponse.json([sample])
+        return HttpResponse.json({ logs: [sample], next_cursor: 'c1' })
+      })
+    )
+    const res = await listLogs()
+    expect(hadCursor).toBe(true)
+    expect(res.logs[0]!.log).toBe('did a thing')
+    expect(res.next_cursor).toBe('c1')
+  })
+
   it('rejects a 403 with the forbidden envelope (and does NOT redirect)', async () => {
     const before = location.href
     worker.use(

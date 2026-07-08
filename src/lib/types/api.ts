@@ -30,6 +30,12 @@ export interface HealthResponse {
  * Do not add token fields here. (.claude/rules/security.md)
  */
 export interface CurrentUser {
+  /**
+   * The RAW IdP `sub`. This is NOT the Go API's `Log.user_id`, which is a
+   * `UUIDv5(namespace, iss|sub)` of the same subject. Same person, DIFFERENT
+   * strings: never compare them for row ownership (README "Pairing with the Go
+   * API"). Ownership is decided server-side from the bearer, never in the SPA.
+   */
   id: string
   displayName: string
   roles?: string[]
@@ -42,6 +48,7 @@ export interface CurrentUser {
  */
 export interface Log {
   id: string
+  /** `UUIDv5(namespace, iss|sub)`, NOT the raw IdP `sub` in `CurrentUser.id`. See README "Pairing". */
   user_id: string
   date_and_time: string
   log: string

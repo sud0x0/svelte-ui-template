@@ -245,6 +245,11 @@ describe('auth routes (confidential OIDC flow)', () => {
     expect(await res.json()).toEqual({ error: 'unauthorised', message: 'no active session' })
   })
 
+  it('sends NO audience param on the authorize request when none is configured (item 3)', async () => {
+    await beginLogin()
+    expect(idp.lastAuthorizeQuery?.get('audience')).toBeNull()
+  })
+
   it('logout without a valid CSRF token is 403', async () => {
     const { code, state, txn } = await beginLogin()
     const cbRes = await fetch(
@@ -261,5 +266,77 @@ describe('auth routes (confidential OIDC flow)', () => {
       redirect: 'manual',
     })
     expect(res.status).toBe(403)
+  })
+})
+
+describe('auth routes with a configured audience (item 3)', () => {
+  let idp: StubIdp
+  let server: Server
+  let base: string
+  let routes: AuthRoutes | null = null
+  const AUDIENCE = 'https://go-api.example.com'
+
+  beforeAll(async () => {
+    idp = await startStubIdp()
+    server = createServer((req, res) => {
+      const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname
+      if (!routes) {
+        res.writeHead(500)
+        return res.end()
+      }
+      if (path === '/auth/login') return void routes.login(req, res)
+      if (path === '/auth/callback') return void routes.callback(req, res)
+      res.writeHead(404)
+      res.end()
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const addr = server.address()
+    if (addr === null || typeof addr === 'string') throw new Error('no port')
+    base = `http://127.0.0.1:${addr.port}`
+
+    const config: BffConfig = {
+      port: addr.port,
+      publicOrigin: base,
+      redirectUri: `${base}/auth/callback`,
+      issuerUrl: idp.issuer,
+      clientId: idp.clientId,
+      clientSecret: idp.clientSecret,
+      apiUpstream: 'http://127.0.0.1:1',
+      apiTimeoutMs: 10_000,
+      cookieSecret: 'unit-test-cookie-secret-32-bytes!!',
+      scopes: 'openid profile email',
+      audience: AUDIENCE,
+    }
+    const oidc = await createOidc(config, { allowInsecure: true })
+    routes = createAuthRoutes({ config, oidc, sessions: createSessionStore() })
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await idp.close()
+  })
+
+  it('carries the audience param on BOTH the authorize redirect and the token grant', async () => {
+    const loginRes = await fetch(`${base}/auth/login`, { redirect: 'manual' })
+    expect(loginRes.status).toBe(302)
+    const txn = getCookie(loginRes, '__Host-txn')!
+    const authorizeUrl = loginRes.headers.get('location')!
+
+    const authRes = await fetch(authorizeUrl, { redirect: 'manual' })
+    const cbUrl = new URL(authRes.headers.get('location')!)
+    const code = cbUrl.searchParams.get('code')!
+    const state = cbUrl.searchParams.get('state')!
+
+    // The authorization request carried the audience exactly as configured.
+    expect(idp.lastAuthorizeQuery?.get('audience')).toBe(AUDIENCE)
+
+    const cbRes = await fetch(
+      `${base}/auth/callback?code=${code}&state=${encodeURIComponent(state)}`,
+      { headers: { cookie: `__Host-txn=${txn}` }, redirect: 'manual' }
+    )
+    expect(cbRes.status).toBe(302)
+
+    // The authorization_code token grant carried the same audience.
+    expect(idp.lastTokenBody?.get('audience')).toBe(AUDIENCE)
   })
 })

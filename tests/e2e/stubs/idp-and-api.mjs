@@ -168,18 +168,22 @@ const server = createServer((req, res) => {
       if (auth !== `Bearer ${lastAccessToken}`) {
         return json(res, 401, { error: 'unauthorised', message: 'bad bearer' })
       }
-      return json(res, 200, {
-        logs: [
-          {
-            id: 'log-e2e-1',
-            user_id: 'ada-123',
-            date_and_time: '2026-07-07T09:00:00Z',
-            log: 'proxied log entry via BFF',
-            created_at: '2026-07-07T09:00:00Z',
-            updated_at: '2026-07-07T09:00:00Z',
-          },
-        ],
-      })
+      const entry = {
+        id: 'log-e2e-1',
+        user_id: 'ada-123',
+        date_and_time: '2026-07-07T09:00:00Z',
+        log: 'proxied log entry via BFF',
+        created_at: '2026-07-07T09:00:00Z',
+        updated_at: '2026-07-07T09:00:00Z',
+      }
+      // Mirror the REAL Go API (userlog_handler.go): shape chosen by PRESENCE of
+      // `?cursor`. With a cursor -> wrapped `{ logs, next_cursor? }`; without ->
+      // offset mode returns a BARE ARRAY. The SPA always sends `cursor`, so the
+      // bare-array branch is the tripwire that catches a cursor-less regression.
+      if (!url.searchParams.has('cursor')) {
+        return json(res, 200, [entry])
+      }
+      return json(res, 200, { logs: [entry] })
     }
     if (path === '/api/v1/logs' && req.method === 'POST') {
       // If the BFF ever proxies an unsafe write here, this counter proves it.
