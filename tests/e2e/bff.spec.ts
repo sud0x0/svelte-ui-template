@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Response } from '@playwright/test'
 
 // End-to-end against the REAL BFF (a confidential OIDC client) driving a real
 // stub IdP and a real stub upstream API. Proves the whole architecture: the
@@ -104,6 +104,82 @@ test('a 403 from the API renders the in-place "not authorised" notice without re
   await expect(page.getByText(/not authorised to view logs/i)).toBeVisible()
   // Still on Home — a 403 must NOT trigger the login redirect (that is only 401).
   await expect(page.getByRole('heading', { name: /welcome, ada lovelace/i })).toBeVisible()
+})
+
+test('proxy strips client X-Forwarded-* / X-Real-IP / Forwarded so they never reach the Go API', async ({
+  page,
+  request,
+}) => {
+  await loginToHome(page)
+
+  // page.request shares the session cookie and (unlike a browser fetch) can set
+  // the forwarding headers verbatim, exercising the REAL BFF proxy path. A GET is
+  // safe, so no CSRF token is needed.
+  const res = await page.request.get('/api/v1/logs?cursor=&limit=10', {
+    headers: {
+      'x-forwarded-for': '9.9.9.9',
+      'x-forwarded-host': 'evil.example',
+      'x-forwarded-proto': 'ftp',
+      'x-real-ip': '9.9.9.9',
+      forwarded: 'for=9.9.9.9;host=evil.example;proto=ftp',
+    },
+  })
+  expect(res.status()).toBe(200)
+
+  // What the stub "Go API" actually saw. The spoofed values must be gone.
+  const fwd = (await request
+    .get(`${STUB}/_control/last-forwarding`)
+    .then((r) => r.json())) as Record<string, string>
+  expect(fwd['x-forwarded-host']).toBeUndefined()
+  expect(fwd['x-forwarded-proto']).toBeUndefined()
+  expect(fwd['x-real-ip']).toBeUndefined()
+  expect(fwd['forwarded']).toBeUndefined()
+  // X-Forwarded-For is either absent or a BFF-set trusted value, never 9.9.9.9.
+  expect(fwd['x-forwarded-for']).not.toBe('9.9.9.9')
+})
+
+test('open-redirect: a return_to that normalises to a protocol-relative // is neutralised to same-origin', async ({
+  page,
+  baseURL,
+}) => {
+  // Before the fix, `?return_to=/..//evil.example/phish` produced
+  // `302 Location: //evil.example/phish` at /auth/callback — a network-path
+  // redirect the browser resolves to http(s)://evil.example. Drive the REAL
+  // login end-to-end and prove the callback Location and the final browser URL
+  // never leave our origin. Includes encoded / dot-segment variants.
+  const appOrigin = new URL(baseURL!).origin
+  const vectors = [
+    '/..//evil.example/phish', // the reported vector
+    '/%2e%2e//evil.example', // percent-encoded dot-dot
+    '/a/..//evil.example', // interior dot-segment
+  ]
+
+  for (const returnTo of vectors) {
+    const callbackLocations: string[] = []
+    const onResponse = (res: Response): void => {
+      if (new URL(res.url()).pathname === '/auth/callback') {
+        const loc = res.headers()['location']
+        if (loc) callbackLocations.push(loc)
+      }
+    }
+    page.on('response', onResponse)
+
+    await page.goto(`/auth/login?return_to=${encodeURIComponent(returnTo)}`)
+    await page.getByRole('link', { name: /sign in as ada/i }).click()
+    await expect(page.getByRole('heading', { name: /welcome, ada lovelace/i })).toBeVisible()
+
+    page.off('response', onResponse)
+
+    // The /auth/callback Location must be same-origin, never `//evil.example`.
+    expect(callbackLocations.length, `no /auth/callback seen for ${returnTo}`).toBeGreaterThan(0)
+    for (const loc of callbackLocations) {
+      expect(loc.startsWith('//'), `Location "${loc}" is protocol-relative`).toBe(false)
+      expect(new URL(loc, appOrigin).origin).toBe(appOrigin)
+    }
+    // The browser never navigated off our origin.
+    expect(new URL(page.url()).origin).toBe(appOrigin)
+    expect(page.url()).not.toContain('evil.example')
+  }
 })
 
 test('the token endpoint rejects a wrong client secret (a green login proves confidential-client auth)', async ({

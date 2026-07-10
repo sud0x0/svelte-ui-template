@@ -90,8 +90,10 @@ export function createApp(deps: AppDeps): RequestListener {
 
 async function main(): Promise<void> {
   const config = loadConfig()
-  // Allow http IdP endpoints only when the issuer itself is http (localhost dev
-  // / E2E stub). A production https issuer keeps the secure-transport guard on.
+  // Enable openid-client's insecure-transport path only for an http issuer. This
+  // is safe because loadConfig already REJECTS an http issuer unless it is a
+  // loopback host or BFF_DEV_INSECURE=true (item 3) — so reaching here with an
+  // http issuer already means dev/loopback, never a silent production downgrade.
   const oidc = await createOidc(config, { allowInsecure: config.issuerUrl.startsWith('http://') })
   const sessions = createSessionStore()
   const authRoutes = createAuthRoutes({ config, oidc, sessions })

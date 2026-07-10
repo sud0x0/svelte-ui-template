@@ -40,9 +40,19 @@ location.search` and cannot be trusted to sanitise it), so the BFF's
    `/auth/login` accepts `return_to` **only** as a same-site relative path: it
    MUST start with a single `/` and is rejected if it starts with `//` or `/\`
    (protocol-relative), contains a backslash, or carries any scheme or authority
-   (`https:`, `javascript:`, `user@host`, …), falling back to `/`. Implemented and
-   tested in `bff/src/routes/auth.ts` (`validateReturnTo`). An unvalidated redirect
-   target is an open redirect ([OWASP Unvalidated Redirects & Forwards](https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html)).
+   (`https:`, `javascript:`, `user@host`, …), falling back to `/`. The raw-string
+   guards are **not sufficient alone**: WHATWG URL normalisation collapses
+   dot-segments, so `/..//evil.com` (and the `/a/..//`, `/./..//`, `/%2e%2e//`
+   family) parses to pathname `//evil.com` — a protocol-relative target. So
+   `validateReturnTo` ALSO rejects a **normalised** pathname that starts with `//`,
+   and `/auth/callback` emits the redirect as an **absolute same-origin URL**
+   (`publicOrigin + returnTo`, string-concatenated — never `new URL(returnTo,
+   publicOrigin)`, which would re-resolve `//host` to a cross-origin URL) so a
+   stray `//path` can never be reinterpreted as protocol-relative. Implemented and
+   tested in `bff/src/routes/auth.ts` (`validateReturnTo`), including the
+   dot-segment/encoded family and an end-to-end browser test in
+   `tests/e2e/bff.spec.ts`. An unvalidated redirect target is an open redirect
+   ([OWASP Unvalidated Redirects & Forwards](https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html)).
    **The BFF is the single validation owner. Do NOT duplicate the validator on the
    SPA side** (the SPA cannot be trusted for this check, and a second copy invites
    drift where one side is tightened and the other is not). The SPA comment at the

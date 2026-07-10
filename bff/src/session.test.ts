@@ -172,12 +172,17 @@ describe('store memory bounding (item 4)', () => {
     expect(store.size()).toBe(1)
   })
 
-  it('caps live transactions by evicting the oldest', () => {
-    const store = createTxnStore({ maxEntries: 2, startSweep: noSweep })
-    store.create(sampleTxn({ expiresAt: 9000 }))
-    store.create(sampleTxn({ expiresAt: 9000 }))
-    store.create(sampleTxn({ expiresAt: 9000 })) // exceeds cap 2 -> oldest evicted
+  it('caps live transactions by REJECTING new ones (never evicting an in-flight login)', () => {
+    const store = createTxnStore({ maxEntries: 2, now: () => 1000, startSweep: noSweep })
+    const first = store.create(sampleTxn({ expiresAt: 9000 }))
+    const second = store.create(sampleTxn({ expiresAt: 9000 }))
+    const overflow = store.create(sampleTxn({ expiresAt: 9000 })) // exceeds cap 2
+    expect(first).not.toBeNull()
+    expect(second).not.toBeNull()
+    expect(overflow).toBeNull() // rejected, not evicting the oldest
     expect(store.size()).toBe(2)
+    // The two earlier (in-flight) transactions survive and are still consumable.
+    expect(store.consume(first as string)).toBeDefined()
   })
 
   it('startUnrefInterval schedules an unref-ed timer so the process can exit', () => {

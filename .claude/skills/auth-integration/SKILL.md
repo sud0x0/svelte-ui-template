@@ -80,6 +80,12 @@ The shipped BFF is a faithful **reference**, not turnkey production. Before prod
   rotate them.
 - **Absolute session lifetime.** The store applies an idle/absolute TTL; confirm it
   matches your policy and add re-auth for sensitive actions if needed.
+- **Rate-limit `/auth/login`.** It is unauthenticated and creates a server-side
+  login transaction per hit. The txn store is capped and REJECTS at capacity (so a
+  flood cannot evict an in-flight login), but add a **per-IP rate limit** at the
+  edge so the cap is never approached. Standard Caddy has no built-in `rate_limit`
+  — use the `caddy-ratelimit` plugin or a WAF / load balancer (Caddyfile has an
+  example). decisions #20.
 - **Consider an off-the-shelf BFF instead.** A mature proxy such as
   [oauth2-proxy](https://github.com/oauth2-proxy/oauth2-proxy) can replace `bff/`
   wholesale. If you adopt one, **verify its upstream-header handling before

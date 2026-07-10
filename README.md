@@ -198,13 +198,14 @@ XSS cannot exfiltrate one.
 | ------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BFF_PORT`          | `8081`                  | TCP port the BFF listens on.                                                                                                                                                                                                                                                                         |
 | `BFF_PUBLIC_ORIGIN` | _(required)_            | Absolute public origin the browser reaches the BFF on. `redirect_uri` is derived as `<origin>/auth/callback`.                                                                                                                                                                                        |
-| `BFF_ISSUER_URL`    | _(required)_            | OIDC issuer URL for discovery (`<issuer>/.well-known/openid-configuration`).                                                                                                                                                                                                                         |
+| `BFF_ISSUER_URL`    | _(required)_            | OIDC issuer URL for discovery (`<issuer>/.well-known/openid-configuration`). **Must be `https://`** except for a loopback host (see `BFF_DEV_INSECURE`).                                                                                                                                             |
 | `BFF_CLIENT_ID`     | _(required)_            | OAuth `client_id` registered at the IdP.                                                                                                                                                                                                                                                             |
 | `BFF_CLIENT_SECRET` | _(required)_            | OAuth `client_secret`. **Confidential client** (BCP §6.1.3.1) — server-side only.                                                                                                                                                                                                                    |
 | `BFF_API_UPSTREAM`  | _(required)_            | Base URL of the Go API the BFF proxies `/api/*` to.                                                                                                                                                                                                                                                  |
 | `BFF_COOKIE_SECRET` | _(required, ≥32 bytes)_ | HMAC key for the signed double-submit CSRF token (security.md rule 2).                                                                                                                                                                                                                               |
 | `BFF_SCOPES`        | `openid profile email`  | Space-delimited OIDC scopes.                                                                                                                                                                                                                                                                         |
 | `BFF_AUDIENCE`      | _(optional, unset)_     | Access-token audience. When set, sent as the `audience` param on the authorization request and token/refresh grants so the IdP mints an access token whose `aud` the Go API accepts. **MUST equal the Go API's `OIDC_AUDIENCE`.** Leave unset if the IdP sets the access-token audience server-side. |
+| `BFF_DEV_INSECURE`  | _(optional, off)_       | **DEV ONLY.** Set to `true` to allow a **non-loopback** `http://` `BFF_ISSUER_URL`/`BFF_API_UPSTREAM`. By default the BFF fails fast on a plain-http issuer/upstream unless the host is loopback, since those carry the client secret and tokens. Never set in production.                           |
 
 ### IdP setup checklist
 
@@ -501,7 +502,8 @@ These are intentional gaps a template adopter completes — not missing work:
   implemented and E2E-tested against a stub IdP; going live is configuration, not
   code: set the `BFF_*` env, flip `VITE_AUTH_MODE=bff`, register a confidential
   client at your IdP, and work the production-hardening checklist (external session
-  store, secret management, absolute session lifetime) in
+  store, secret management, absolute session lifetime, a per-IP rate limit on
+  `/auth/login`) in
   [`/auth-integration`](.claude/skills/auth-integration/SKILL.md). The Go side
   resolves the user and calls `shared.WithUserID` at the
   [`r.Route("/api/v1", …)`](https://github.com/sud0x0/go-api-template) seam in

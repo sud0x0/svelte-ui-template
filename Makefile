@@ -16,7 +16,7 @@ VERSION ?= $(shell node -p "require('./package.json').version" 2>/dev/null || ec
         prod-bundle prod-image release-check changelog-check \
         ci verify \
         lint fmt fmt-check check \
-        test test-unit test-e2e test-coverage test-scripts size csp-check \
+        test test-unit test-e2e test-coverage test-scripts size csp-check caddy-check \
         bff-build bff-dev bff-test \
         pre-commit-install pre-commit-run audit semgrep socket help
 
@@ -231,6 +231,17 @@ csp-check: node_modules
 	node scripts/check-csp.mjs http://localhost:4173; status=$$?; \
 	kill `cat .preview.pid` 2>/dev/null; rm -f .preview.pid; \
 	exit $$status
+
+# Prove the AUTHORITATIVE Caddyfile: `caddy validate` it, then serve dist/ through
+# a REAL Caddy (pinned image via docker/podman) over its internal-CA HTTPS and
+# assert the EXACT edge security headers (CSP incl. frame-ancestors 'none', HSTS,
+# nosniff, X-Frame-Options, Referrer-Policy, Permissions-Policy, COOP, -Server) —
+# the header-only directives a <meta> tag can't carry. NEEDS docker OR podman.
+# Not folded into `verify` so `verify` needs no container runtime; CI runs it.
+caddy-check: node_modules
+	@echo "==> caddy validate + real-Caddy edge-header check"
+	@pnpm build
+	@node scripts/check-caddy-headers.mjs
 
 # ============================================================================
 # Code quality

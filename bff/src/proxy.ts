@@ -33,6 +33,13 @@ function isAbortError(err: unknown): boolean {
 // Hop-by-hop and identity headers we must NOT forward upstream. Authorization
 // and Cookie are stripped so the browser can never smuggle its own credentials
 // past the BFF — the ONLY Authorization the API sees is the one we attach.
+//
+// The proxy-trust / forwarding headers are ALSO stripped (item 2): a browser can
+// set X-Forwarded-For / X-Forwarded-Host / X-Forwarded-Proto / X-Real-IP /
+// Forwarded, and if the BFF relayed them verbatim the Go API might trust a SPOOFED
+// client IP, host, or scheme (rate-limit bypass, cache poisoning, wrong redirect
+// base). The credential-attaching BFF owns these headers, not the client
+// (security.md rule 11). A single trusted X-Forwarded-For is re-set below.
 const STRIP_REQUEST_HEADERS = new Set([
   'authorization',
   'cookie',
@@ -45,6 +52,11 @@ const STRIP_REQUEST_HEADERS = new Set([
   'proxy-authorization',
   'te',
   'trailer',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+  'forwarded',
 ])
 
 // Response headers that describe the ON-THE-WIRE encoding of the upstream body.
@@ -140,6 +152,14 @@ export function createProxy(deps: ProxyDeps): Proxy {
       // X-Request-ID and other tracing/content headers pass through here.
       for (const v of Array.isArray(value) ? value : [value]) headers.append(name, v)
     }
+    // Set a SINGLE trusted X-Forwarded-For from the immediate peer's address
+    // (req.socket.remoteAddress) AFTER stripping any inbound value, so the Go API
+    // sees an un-spoofable client IP (item 2). NOTE: behind a trusted reverse
+    // proxy (Caddy) the immediate peer is the PROXY, not the browser — preserving
+    // the real client IP through a trusted-proxy chain is an operator decision
+    // (a trusted-proxy allowlist), deliberately out of scope for this reference.
+    const clientIp = req.socket.remoteAddress
+    if (clientIp !== undefined && clientIp !== '') headers.set('X-Forwarded-For', clientIp)
     // The ONLY credential the upstream sees. Absent on health passthrough.
     if (accessToken !== undefined) headers.set('Authorization', `Bearer ${accessToken}`)
 

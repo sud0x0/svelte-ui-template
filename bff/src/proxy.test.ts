@@ -126,6 +126,33 @@ describe('authenticated proxy', () => {
     expect(upstream.headers.get('x-request-id')).toBe('req-42')
   })
 
+  it('strips inbound forwarding headers and re-sets a single trusted X-Forwarded-For (item 2)', async () => {
+    h = await mount({})
+    const sid = h.sessions.create(session(tokens()))
+    const res = await fetch(`${h.base}/api/v1/logs`, {
+      headers: {
+        cookie: `__Host-session=${sid}`,
+        'x-forwarded-for': '9.9.9.9',
+        'x-forwarded-host': 'evil.example',
+        'x-forwarded-proto': 'ftp',
+        'x-real-ip': '9.9.9.9',
+        forwarded: 'for=9.9.9.9;host=evil.example;proto=ftp',
+      },
+    })
+    expect(res.status).toBe(200)
+    const up = h.captured[0].headers
+    // The spoofable trust headers never reach the upstream.
+    expect(up.has('x-forwarded-host')).toBe(false)
+    expect(up.has('x-forwarded-proto')).toBe(false)
+    expect(up.has('x-real-ip')).toBe(false)
+    expect(up.has('forwarded')).toBe(false)
+    // X-Forwarded-For is REPLACED with the un-spoofable peer address (loopback in
+    // this test), never the client-supplied 9.9.9.9.
+    const xff = up.get('x-forwarded-for')
+    expect(xff).not.toBeNull()
+    expect(xff).not.toBe('9.9.9.9')
+  })
+
   it('no session -> the Go 401 envelope, byte-for-byte, and does NOT proxy', async () => {
     h = await mount({})
     const res = await fetch(`${h.base}/api/v1/logs`)

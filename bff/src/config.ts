@@ -71,6 +71,42 @@ function requireAbsoluteUrl(env: NodeJS.ProcessEnv, key: string): string {
   return raw.replace(/\/+$/, '')
 }
 
+/** True for loopback hosts where plain `http` is acceptable for local dev / E2E. */
+function isLoopbackHost(hostname: string): boolean {
+  // URL lowercases hostnames; the IPv6 loopback arrives bracketed as '[::1]'.
+  const host = hostname.replace(/^\[|\]$/g, '')
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    host.endsWith('.localhost') ||
+    /^127(?:\.\d{1,3}){3}$/.test(host)
+  )
+}
+
+/**
+ * Like {@link requireAbsoluteUrl}, but REJECTS a plain-`http://` URL unless the
+ * host is loopback OR `BFF_DEV_INSECURE=true` is set (item 3). The issuer
+ * (discovery / token / refresh) and the upstream both carry the client secret
+ * and tokens, so a mis-set production `http://` endpoint would silently disable
+ * openid-client's HTTPS enforcement. Fail fast at load rather than downgrade TLS
+ * transparently. The E2E stub uses `http://localhost`, so loopback stays allowed.
+ */
+function requireSecureBackendUrl(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  devInsecure: boolean
+): string {
+  const raw = requireAbsoluteUrl(env, key)
+  const url = new URL(raw)
+  if (url.protocol === 'http:' && !devInsecure && !isLoopbackHost(url.hostname)) {
+    throw new ConfigError(
+      `${key} must use https:// (got ${raw}). Plain http is allowed only for a ` +
+        `loopback host; for a non-loopback http endpoint set BFF_DEV_INSECURE=true (DEV ONLY).`
+    )
+  }
+  return raw
+}
+
 /**
  * Reads and validates the environment — the ONE `process.env` read site. Called
  * exactly once, by server.ts (the composition root). Every other module takes
@@ -109,16 +145,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
   // (not an empty string) when unset, and the OIDC layer can branch on presence.
   const audience = env.BFF_AUDIENCE?.trim()
 
+  // Opt-in to plain http for NON-loopback issuer/upstream (dev only). Loopback
+  // http is always allowed; anything else over http fails fast (item 3).
+  const devInsecure = env.BFF_DEV_INSECURE === 'true'
+
   return {
     port,
     publicOrigin,
     // redirect_uri is DERIVED, not configured, so it can never drift from the
     // origin the cookies are scoped to. The IdP must register exactly this value.
     redirectUri: `${publicOrigin}/auth/callback`,
-    issuerUrl: requireAbsoluteUrl(env, 'BFF_ISSUER_URL'),
+    issuerUrl: requireSecureBackendUrl(env, 'BFF_ISSUER_URL', devInsecure),
     clientId: requireEnv(env, 'BFF_CLIENT_ID'),
     clientSecret: requireEnv(env, 'BFF_CLIENT_SECRET'),
-    apiUpstream: requireAbsoluteUrl(env, 'BFF_API_UPSTREAM'),
+    apiUpstream: requireSecureBackendUrl(env, 'BFF_API_UPSTREAM', devInsecure),
     apiTimeoutMs,
     cookieSecret,
     scopes: env.BFF_SCOPES ?? 'openid profile email',

@@ -37,11 +37,27 @@ RUN pnpm build
 # tag: caddy:2-alpine
 FROM caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
 
+# Run Caddy as a NON-ROOT user (least privilege), mirroring container.bff's
+# `USER node`. Caddy still binds the privileged :80/:443, so grant ONLY
+# CAP_NET_BIND_SERVICE to the binary instead of running as root. ACME/OCSP state
+# lives under /data and /config, which must be writable by that user. libcap is
+# added just to run setcap, then removed — the capability xattr persists on the
+# binary. If an operator mounts a NAMED volume over /data or /config, they must
+# chown it to the `app` user themselves.
+RUN apk add --no-cache --virtual .setcap libcap \
+ && setcap cap_net_bind_service=+ep "$(command -v caddy)" \
+ && apk del .setcap \
+ && addgroup -S app \
+ && adduser -S -G app app \
+ && mkdir -p /data /config \
+ && chown -R app:app /data /config
+USER app
+
 # The Caddyfile serves the SPA from $SITE_ROOT (with the history fallback) and
 # reverse-proxies /api,/auth,/health to $API_UPSTREAM.
 ENV SITE_ROOT=/srv
-COPY --from=build /app/dist /srv
-COPY Caddyfile /etc/caddy/Caddyfile
+COPY --from=build --chown=app:app /app/dist /srv
+COPY --chown=app:app Caddyfile /etc/caddy/Caddyfile
 
 EXPOSE 80 443
 

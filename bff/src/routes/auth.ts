@@ -23,6 +23,13 @@ const TXN_TTL_MS = 300_000 // 5 minutes — matches the __Host-txn cookie Max-Ag
  * (security.md rule 1): accept ONLY a same-site relative path — one leading `/`,
  * never `//` or `/\` (protocol-relative), never a backslash, never a scheme or
  * authority. Anything else falls back to `/`. Exported for direct testing.
+ *
+ * The raw-string guards below only see the PRE-normalisation value. WHATWG URL
+ * normalisation collapses dot-segments, so `/..//evil.com` (and the whole
+ * `/a/..//`, `/./..//`, `/%2e%2e//` family) parses to pathname `//evil.com` — a
+ * protocol-relative (network-path) target the browser resolves to https://evil.com.
+ * So we re-check the NORMALISED pathname and reject a leading `//` too. Confirmed
+ * live: `?return_to=/..//evil.example/phish` used to yield `302 Location: //evil.example/phish`.
  */
 export function validateReturnTo(raw: string | null | undefined, origin: string): string {
   if (!raw || !raw.startsWith('/')) return '/'
@@ -32,6 +39,8 @@ export function validateReturnTo(raw: string | null | undefined, origin: string)
     // Resolve against our own origin; if it escapes to another origin, reject.
     const url = new URL(raw, origin)
     if (url.origin !== new URL(origin).origin) return '/'
+    // Post-normalisation network-path guard (see the doc comment above).
+    if (url.pathname.startsWith('//')) return '/'
     return url.pathname + url.search + url.hash
   } catch {
     return '/'
@@ -97,6 +106,17 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
 
       const { authorizationUrl, transaction } = await oidc.beginLogin()
       const txnId = txns.create({ ...transaction, returnTo, expiresAt: Date.now() + TXN_TTL_MS })
+      if (txnId === null) {
+        // The login-transaction store is at capacity (a flood). REFUSE rather than
+        // evict a legitimate in-flight login (item 6). A per-IP edge rate limit on
+        // /auth/login (Caddyfile) should make this effectively unreachable.
+        return sendJson(
+          res,
+          503,
+          { error: 'unavailable', message: 'too many pending logins, please retry shortly' },
+          { 'Retry-After': '5' }
+        )
+      }
 
       // The __Host-txn cookie is the handle to the server-side transaction, with
       // a 5-minute Max-Age (BCP 6.1.3.2). SameSite=Lax (not Strict like the
@@ -130,7 +150,14 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
         const { tokens, claims } = await oidc.completeLogin(currentUrl, txn)
         // expiresAt: 0 lets the store apply its own absolute TTL.
         const sid = sessions.create({ tokens, claims, expiresAt: 0 })
-        redirect(res, txn.returnTo, [
+        // Belt-and-braces open-redirect defence (security.md rule 1): emit an
+        // ABSOLUTE same-origin URL by STRING-concatenating publicOrigin + the
+        // validated path. `returnTo` already starts with a single `/` (never
+        // `//`), so this is always same-origin — and even a stray `//path` could
+        // not be reinterpreted as protocol-relative once it carries our scheme +
+        // host. NB: do NOT use `new URL(returnTo, publicOrigin)` — that would
+        // resolve a `//host` value BACK to a cross-origin URL.
+        redirect(res, config.publicOrigin + txn.returnTo, [
           serializeHostCookie(SESSION_COOKIE, sid, { httpOnly: true }),
           serializeCsrfCookie(csrfToken(config.cookieSecret, sid)),
           clearTxn,

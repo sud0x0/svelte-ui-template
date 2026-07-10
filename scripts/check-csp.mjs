@@ -4,6 +4,12 @@
 // any script-src violation specifically. This is how the CSP rule in
 // .claude/rules/security.md is *proven*, not asserted.
 //
+// It ALSO makes a POSITIVE assertion (item 4): the violation listener alone is
+// fail-open (a bundle shipping NO CSP raises no violation), so this script also
+// reads the DELIVERED policy — the response header and/or the index.html <meta>
+// tag — and fails unless a strict `default-src 'self'` + `script-src 'self'`
+// (no `unsafe-inline`/`unsafe-eval`) is actually present.
+//
 // Usage:
 //   pnpm build && pnpm exec vite preview --port 4173 --strictPort &
 //   node scripts/check-csp.mjs http://localhost:4173
@@ -60,6 +66,37 @@ for (const href of ['/login', '/does-not-exist']) {
 const reported = await page.evaluate(() => window.__cspViolations || [])
 violations.push(...reported)
 
+// POSITIVE assertion (item 4). The violation listener above is necessary but
+// FAIL-OPEN: a build that ships NO CSP raises no violation and would pass green.
+// So also require that a STRICT policy is actually delivered — via the response
+// header (Caddy/prod) and/or the index.html <meta http-equiv> tag (vite preview).
+const headerCsp = response.headers()['content-security-policy'] ?? ''
+const metaCsp = await page.evaluate(() => {
+  const el = document.querySelector('meta[http-equiv="Content-Security-Policy" i]')
+  return el?.getAttribute('content') ?? ''
+})
+
+/** Returns a directive's lower-cased token list, or null if the directive is absent. */
+function directiveTokens(policy, name) {
+  for (const part of policy.split(';')) {
+    const [dir, ...tokens] = part.trim().split(/\s+/)
+    if (dir && dir.toLowerCase() === name) return tokens.map((t) => t.toLowerCase())
+  }
+  return null
+}
+
+/** A strict policy: default-src 'self' AND script-src 'self' with no unsafe-*. */
+function isStrict(policy) {
+  const def = directiveTokens(policy, 'default-src')
+  const script = directiveTokens(policy, 'script-src')
+  if (!def || !def.includes("'self'")) return false
+  if (!script || !script.includes("'self'")) return false
+  if (script.includes("'unsafe-inline'") || script.includes("'unsafe-eval'")) return false
+  return true
+}
+
+const strictSource = isStrict(headerCsp) ? 'response header' : isStrict(metaCsp) ? 'meta tag' : null
+
 await browser.close()
 
 if (violations.length > 0) {
@@ -72,4 +109,13 @@ if (violations.length > 0) {
   process.exit(1)
 }
 
-console.log(`✓ No CSP violations on ${url}. script-src 'self' holds.`)
+if (strictSource === null) {
+  console.error(`✗ No STRICT CSP delivered on ${url}. Need default-src 'self' and`)
+  console.error(`  script-src 'self' (no 'unsafe-inline'/'unsafe-eval') in a response header`)
+  console.error(`  or the index.html <meta http-equiv> tag. A missing/weak CSP must fail here.`)
+  console.error(`  header CSP: ${headerCsp || '(none)'}`)
+  console.error(`  meta CSP:   ${metaCsp || '(none)'}`)
+  process.exit(1)
+}
+
+console.log(`✓ No CSP violations on ${url}, and a strict CSP is delivered (${strictSource}).`)

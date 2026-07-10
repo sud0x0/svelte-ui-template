@@ -36,6 +36,16 @@ const codes = new Map() // code -> { codeChallenge, nonce }
 let lastAccessToken = null // the token most recently minted; the API checks it
 let logsStatus = 200 // flippable via /_control to exercise the 403 path
 let logsPostCount = 0 // proves the BFF rejects an unsafe write before proxying
+let lastForwarding = {} // forwarding headers the upstream saw (item 2 proof)
+
+// Forwarding/trust headers the BFF MUST strip before proxying to this "Go API".
+const FORWARDING_HEADERS = [
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+  'forwarded',
+]
 
 const b64url = (input) => Buffer.from(input).toString('base64url')
 
@@ -159,6 +169,11 @@ const server = createServer((req, res) => {
     if (path === '/health') return json(res, 200, { status: 'ok', version: 'e2e-stub' })
 
     if (path === '/api/v1/logs' && (req.method ?? 'GET') === 'GET') {
+      // Record which forwarding/trust headers actually arrived (item 2 proof).
+      lastForwarding = {}
+      for (const h of FORWARDING_HEADERS) {
+        if (req.headers[h] !== undefined) lastForwarding[h] = req.headers[h]
+      }
       if (logsStatus === 403) {
         return json(res, 403, { error: 'forbidden', message: 'not authorised' })
       }
@@ -199,9 +214,13 @@ const server = createServer((req, res) => {
     if (path === '/_control/state') {
       return json(res, 200, { logsPostCount, hasMintedToken: lastAccessToken !== null })
     }
+    if (path === '/_control/last-forwarding') {
+      return json(res, 200, lastForwarding)
+    }
     if (path === '/_control/reset') {
       logsStatus = 200
       logsPostCount = 0
+      lastForwarding = {}
       return json(res, 200, { ok: true })
     }
 

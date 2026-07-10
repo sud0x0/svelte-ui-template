@@ -79,6 +79,18 @@ http://{$SITE_ADDRESS} {
 	# ever talks to THIS origin (fetch stays same-origin) and the IdP round trip is
 	# a top-level navigation, not a connect-src fetch — so no IdP origin, no token
 	# endpoint, and no CORS ever need to appear in the policy.
+	#
+	# PRODUCTION HARDENING (item 6): put a PER-IP RATE LIMIT in front of
+	# /auth/login. Each hit creates a short-lived server-side login transaction in
+	# the BFF; the store is capped and REJECTS at capacity (bff/src/session.ts) so a
+	# flood cannot evict a legitimate in-flight login, but a rate limit keeps the
+	# cap from ever being approached. Standard Caddy has NO built-in rate_limit —
+	# use the `caddy-ratelimit` plugin (a custom build) or an upstream WAF / load
+	# balancer. Example with the plugin:
+	#     @login path /auth/login
+	#     rate_limit @login {
+	#         zone login { key {remote_host}  events 10  window 1m }
+	#     }
 	@backend path /api/* /auth/* /health
 	handle @backend {
 		reverse_proxy {$API_UPSTREAM} {

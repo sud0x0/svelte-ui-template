@@ -63,7 +63,9 @@ const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000
 const DEFAULT_SWEEP_INTERVAL_MS = 60_000
 // Hard caps bound memory against an unauthenticated flood (item 4). Sessions are
 // created only AFTER a full login; txns are created by the UNAUTHENTICATED
-// /auth/login, so the txn cap is the tighter DoS backstop.
+// /auth/login, so the txn cap is the tighter DoS backstop. At the cap the session
+// store evicts the OLDEST (post-auth, acceptable) while the txn store REJECTS the
+// new entry (item 6) so a flood cannot drop a legitimate in-flight login.
 const DEFAULT_MAX_SESSIONS = 100_000
 const DEFAULT_MAX_TXNS = 10_000
 
@@ -155,7 +157,8 @@ export interface LoginTransaction {
 }
 
 export interface TxnStore {
-  create(txn: LoginTransaction): string
+  /** Creates a transaction and returns its id, or `null` when the store is at capacity. */
+  create(txn: LoginTransaction): string | null
   /** Deletes AND returns the transaction (once-only); undefined if unknown/expired. */
   consume(id: string): LoginTransaction | undefined
   size(): number
@@ -164,7 +167,7 @@ export interface TxnStore {
 export interface TxnStoreOptions {
   /** Injectable clock for deterministic tests. */
   now?: () => number
-  /** Hard cap on live transactions; the OLDEST is evicted when a new one would exceed it. */
+  /** Hard cap on live transactions; `create` REJECTS (returns null) at the cap — see below. */
   maxEntries?: number
   /** Interval (ms) of the periodic expiry sweep (default 60s). */
   sweepIntervalMs?: number
@@ -189,7 +192,12 @@ export function createTxnStore(opts: TxnStoreOptions = {}): TxnStore {
 
   return {
     create(txn) {
-      if (store.size >= maxEntries) evictOldest(store)
+      // Reject-on-cap, NOT evict-oldest (item 6): the txn store is the
+      // UNAUTHENTICATED /auth/login surface, so evicting the oldest under a flood
+      // would drop a legitimate in-flight login. Refuse the new txn instead and
+      // let the caller answer 503. Pair with a per-IP edge rate limit on
+      // /auth/login (Caddyfile) so this cap is effectively unreachable in practice.
+      if (store.size >= maxEntries) return null
       const id = randomBytes(32).toString('base64url')
       store.set(id, txn)
       return id

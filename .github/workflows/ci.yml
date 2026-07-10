@@ -112,6 +112,13 @@ jobs:
       - name: CSP check (script-src 'self' in a real browser)
         run: make csp-check
 
+      # Validate the authoritative Caddyfile and assert the EXACT edge security
+      # headers a REAL Caddy emits (CSP incl. frame-ancestors 'none', HSTS, XFO,
+      # …) — the header-only directives the <meta> tag cannot carry. Uses Docker
+      # (preinstalled on the runner) to run the pinned caddy image.
+      - name: Caddyfile validate + edge headers (real Caddy)
+        run: node scripts/check-caddy-headers.mjs
+
       - name: Bundle-size budget
         run: node scripts/check-bundle-size.mjs
 

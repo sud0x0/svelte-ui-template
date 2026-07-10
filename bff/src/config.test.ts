@@ -82,4 +82,35 @@ describe('BFF config', () => {
       'https://go-api.example.com'
     )
   })
+
+  // Item 3: an http:// issuer/upstream is a silent TLS downgrade unless it is
+  // loopback or explicitly opted in via BFF_DEV_INSECURE.
+  it('rejects a NON-loopback http:// issuer or upstream without BFF_DEV_INSECURE', () => {
+    expect(() => loadConfig({ ...BASE, BFF_ISSUER_URL: 'http://idp.example.com' })).toThrow(/https/)
+    expect(() => loadConfig({ ...BASE, BFF_API_UPSTREAM: 'http://api.example.com' })).toThrow(
+      ConfigError
+    )
+  })
+
+  it('still boots for loopback http (localhost / 127.0.0.1 / ::1 / *.localhost)', () => {
+    // The default BASE already uses http://localhost for the upstream.
+    expect(() => loadConfig(BASE)).not.toThrow()
+    for (const host of ['localhost:9', '127.0.0.1:9', '[::1]:9', 'sub.localhost:9']) {
+      expect(() =>
+        loadConfig({
+          ...BASE,
+          BFF_ISSUER_URL: `http://${host}`,
+          BFF_API_UPSTREAM: `http://${host}`,
+        })
+      ).not.toThrow()
+    }
+  })
+
+  it('permits a non-loopback http endpoint only with the explicit BFF_DEV_INSECURE=true opt-in', () => {
+    const insecure = { ...BASE, BFF_ISSUER_URL: 'http://idp.example.com', BFF_DEV_INSECURE: 'true' }
+    expect(() => loadConfig(insecure)).not.toThrow()
+    expect(loadConfig(insecure).issuerUrl).toBe('http://idp.example.com')
+    // Any value other than the exact string 'true' does NOT opt in.
+    expect(() => loadConfig({ ...insecure, BFF_DEV_INSECURE: '1' })).toThrow(/https/)
+  })
 })

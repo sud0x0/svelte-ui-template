@@ -13,9 +13,3 @@ section is missing or empty. **Commit messages do not feed the changelog.** Keep
 <!-- Add entries under the `## [Unreleased]` heading below as you ship changes. Keep a Changelog groups, in order: Added, Changed, Deprecated, Removed, Fixed, Security — omit any that stay empty. On the first release, retitle the `## [Unreleased]` heading to `## [X.Y.Z] - <date>` and run `make changelog-check VERSION=x.y.z`: scripts/extract-changelog.sh extracts the matching `## [X.Y.Z]` section as the GitHub Release body (the release workflow fails on a missing/empty section), and tagging is the repository owner's act — agents never tag. -->
 
 ## [Unreleased]
-
-
-### Added
-
-
-### Changed

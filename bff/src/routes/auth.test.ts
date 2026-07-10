@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { createServer, type Server } from 'node:http'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { BffConfig } from '../config.ts'
 import { createOidc, type OidcClient } from '../oidc.ts'
-import { createSessionStore, type SessionStore } from '../session.ts'
+import { createSessionStore, type SessionStore, type TxnStore } from '../session.ts'
 import { createAuthRoutes, validateReturnTo, mapClaimsToUser, type AuthRoutes } from './auth.ts'
 import { startStubIdp, type StubIdp } from '../testutil/stub-idp.ts'
 
@@ -26,6 +26,25 @@ describe('validateReturnTo (open-redirect guard, security.md rule 1)', () => {
       'javascript:alert(1)',
       'http://app.example.com.evil.com',
       'ftp://x',
+    ]) {
+      expect(validateReturnTo(bad, origin)).toBe('/')
+    }
+  })
+
+  // The confirmed-live bypass family: each RAW value passes the literal `//`
+  // guard, but WHATWG URL normalisation collapses the dot-segments to a pathname
+  // that STARTS WITH `//` (a protocol-relative redirect to //evil.com). The
+  // post-normalisation pathname guard must neutralise every one to `/`.
+  it('neutralises dot-segment / encoded paths that normalise to a protocol-relative //', () => {
+    for (const bad of [
+      '/..//evil.example/phish', // the reported vector
+      '/a/..//evil.com',
+      '/./..//evil.com',
+      '/%2e%2e//evil.com', // percent-encoded dot-dot
+      '/%2e%2e//evil.com/path?q=1',
+      '/..//evil.com/path?q=1',
+      '/..//evil.com#frag',
+      '/../..//evil.com',
     ]) {
       expect(validateReturnTo(bad, origin)).toBe('/')
     }
@@ -163,7 +182,11 @@ describe('auth routes (confidential OIDC flow)', () => {
       }
     )
     expect(cbRes.status).toBe(302)
-    expect(cbRes.headers.get('location')).toBe('/dashboard')
+    // The callback emits an ABSOLUTE same-origin URL (belt-and-braces open-redirect
+    // defence): publicOrigin + the validated path. Same-origin, path preserved.
+    const loc = cbRes.headers.get('location')!
+    expect(loc).toBe(`${base}/dashboard`)
+    expect(new URL(loc).origin).toBe(new URL(base).origin)
     const sid = getCookie(cbRes, '__Host-session')
     const csrf = getCookie(cbRes, 'csrf')
     expect(sid).toBeDefined()
@@ -338,5 +361,57 @@ describe('auth routes with a configured audience (item 3)', () => {
 
     // The authorization_code token grant carried the same audience.
     expect(idp.lastTokenBody?.get('audience')).toBe(AUDIENCE)
+  })
+})
+
+describe('login at transaction-store capacity (item 6)', () => {
+  it('answers 503 + Retry-After instead of evicting an in-flight login', async () => {
+    const config: BffConfig = {
+      port: 0,
+      publicOrigin: 'http://127.0.0.1',
+      redirectUri: 'http://127.0.0.1/auth/callback',
+      issuerUrl: 'http://idp.test',
+      clientId: 'c',
+      clientSecret: 's',
+      apiUpstream: 'http://up.test',
+      apiTimeoutMs: 10_000,
+      cookieSecret: 'unit-test-cookie-secret-32-bytes!!',
+      scopes: 'openid',
+    }
+    const oidc: OidcClient = {
+      beginLogin: () =>
+        Promise.resolve({
+          authorizationUrl: 'http://idp.test/authorize',
+          transaction: { state: 's', nonce: 'n', codeVerifier: 'v' },
+        }),
+      completeLogin: () => Promise.reject(new Error('unused')),
+      refresh: () => Promise.reject(new Error('unused')),
+      hasEndSession: () => false,
+      endSessionUrl: () => '',
+    }
+    // A txn store that is always "full": create() refuses.
+    const fullTxns: TxnStore = { create: () => null, consume: () => undefined, size: () => 0 }
+    const routes = createAuthRoutes({
+      config,
+      oidc,
+      sessions: createSessionStore(),
+      txns: fullTxns,
+    })
+
+    let status = 0
+    let extra: Record<string, unknown> = {}
+    const res = {
+      writeHead(s: number, h: Record<string, unknown>) {
+        status = s
+        extra = h
+        return this
+      },
+      end() {},
+    } as unknown as ServerResponse
+    const req = { url: '/auth/login', method: 'GET', headers: {} } as unknown as IncomingMessage
+
+    await routes.login(req, res)
+    expect(status).toBe(503)
+    expect(extra['Retry-After']).toBe('5')
   })
 })
