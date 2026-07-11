@@ -144,9 +144,13 @@ strict-origin-when-cross-origin`, `Permissions-Policy` locking
 10. **Dependencies are a supply-chain decision.** Any new runtime dependency is
     justified in the commit body. SBOM (Syft) + `make socket` (Socket.dev) back
     this up. The **browser bundle** ships with **zero** runtime dependencies — keep
-    it lean. The **BFF** admits exactly one, audited: `openid-client` (an IESG-BCP
-    recommendation is not a licence to hand-roll OAuth). See
-    [decisions.md](./decisions.md).
+    it lean (verify: `grep -rn "valkey\|ioredis\|redis" src/` is empty). The **BFF**
+    admits one required, audited dependency — `openid-client` (an IESG-BCP
+    recommendation is not a licence to hand-roll OAuth) — plus **one optional**,
+    audited dependency loaded ONLY when `BFF_SESSION_STORE=valkey`: `iovalkey` (the
+    exact-pinned ioredis fork; hand-rolling a RESP client would be the same mistake).
+    Both are BFF-only; neither reaches the browser. See
+    [decisions.md](./decisions.md) (#17, #21).
 
 11. **The proxy strips inbound credentials and attaches its own.** In `bff` mode
     the BFF proxies `/api/*` to the Go API (`bff/src/proxy.ts`). It **strips the

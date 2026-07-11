@@ -18,6 +18,9 @@ function baseConfig(over: Partial<BffConfig> = {}): BffConfig {
     trustedProxy: false,
     cookieSecret: 'x'.repeat(32),
     scopes: 'openid',
+    sessionStore: 'memory',
+    valkeyKeyPrefix: 'bff:',
+    valkeyConnectTimeoutMs: 10_000,
     ...over,
   }
 }

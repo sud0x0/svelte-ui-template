@@ -203,6 +203,13 @@ bff-test: node_modules
 bff-build: node_modules
 	@echo "==> esbuild bff" && pnpm bff:build
 
+# Prove the OPTIONAL Valkey session store survives a BFF restart (decisions #21):
+# starts a real Valkey (podman), the stub IdP+API, and the real BFF with
+# BFF_SESSION_STORE=valkey, drives a full login, then RESTARTS the BFF and confirms
+# the session persists. NEEDS podman. NO browser (a scripted cookie-jar client).
+valkey-check: node_modules
+	@echo "==> valkey restart-survival check" && node scripts/valkey-e2e-check.mjs
+
 # Watch-mode BFF dev server. Runs the TypeScript SOURCE directly via Node's
 # native type-stripping (Node >= 22.18) — chosen over adding a tsx/ts-node
 # dependency to keep the toolchain lean (esbuild is reserved for the prod

@@ -23,6 +23,9 @@ function baseConfig(): BffConfig {
     trustedProxy: false,
     cookieSecret: 'server-test-cookie-secret-32byte!',
     scopes: 'openid',
+    sessionStore: 'memory',
+    valkeyKeyPrefix: 'bff:',
+    valkeyConnectTimeoutMs: 10_000,
   }
 }
 

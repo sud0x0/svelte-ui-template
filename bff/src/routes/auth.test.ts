@@ -140,6 +140,9 @@ describe('auth routes (confidential OIDC flow)', () => {
       trustedProxy: false,
       cookieSecret: 'unit-test-cookie-secret-32-bytes!!',
       scopes: 'openid profile email',
+      sessionStore: 'memory',
+      valkeyKeyPrefix: 'bff:',
+      valkeyConnectTimeoutMs: 10_000,
     }
     oidc = await createOidc(config, { allowInsecure: true })
     sessions = createSessionStore()
@@ -381,6 +384,9 @@ describe('auth routes with a configured audience (item 3)', () => {
       trustedProxy: false,
       cookieSecret: 'unit-test-cookie-secret-32-bytes!!',
       scopes: 'openid profile email',
+      sessionStore: 'memory',
+      valkeyKeyPrefix: 'bff:',
+      valkeyConnectTimeoutMs: 10_000,
       audience: AUDIENCE,
     }
     const oidc = await createOidc(config, { allowInsecure: true })
@@ -432,6 +438,9 @@ describe('login at transaction-store capacity (item 6)', () => {
       trustedProxy: false,
       cookieSecret: 'unit-test-cookie-secret-32-bytes!!',
       scopes: 'openid',
+      sessionStore: 'memory',
+      valkeyKeyPrefix: 'bff:',
+      valkeyConnectTimeoutMs: 10_000,
     }
     const oidc: OidcClient = {
       beginLogin: () =>

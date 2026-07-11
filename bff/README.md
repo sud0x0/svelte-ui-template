@@ -17,15 +17,16 @@ file is only a pointer so the directory is not silent.
 
 ## Module map
 
-| File                 | Responsibility                                                         |
-| -------------------- | ---------------------------------------------------------------------- |
-| `src/config.ts`      | The one `process.env` read site; fail-fast validation.                 |
-| `src/session.ts`     | In-memory session store + the `__Host-` cookie contract (BCP 6.1.3.2). |
-| `src/csrf.ts`        | Signed double-submit CSRF (HMAC) + the Sec-Fetch-Site gate.            |
-| `src/oidc.ts`        | The confidential OIDC client (discovery, login, callback, refresh).    |
-| `src/routes/auth.ts` | `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/me`.           |
-| `src/proxy.ts`       | Authenticated `/api/*` proxy with server-side refresh.                 |
-| `src/server.ts`      | Composition root: config → routes → proxy → HTTP server.               |
+| File                  | Responsibility                                                                                                                                                                |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/config.ts`       | The one `process.env` read site; fail-fast validation.                                                                                                                        |
+| `src/session.ts`      | In-memory session store + the `__Host-` cookie contract (BCP 6.1.3.2).                                                                                                        |
+| `src/valkey-store.ts` | OPTIONAL Valkey-backed session + txn store (durable / multi-instance) — off by default. See the README ["Session store (production)"](../README.md#session-store-production). |
+| `src/csrf.ts`         | Signed double-submit CSRF (HMAC) + the Sec-Fetch-Site gate.                                                                                                                   |
+| `src/oidc.ts`         | The confidential OIDC client (discovery, login, callback, refresh).                                                                                                           |
+| `src/routes/auth.ts`  | `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/me`.                                                                                                                  |
+| `src/proxy.ts`        | Authenticated `/api/*` proxy with server-side refresh.                                                                                                                        |
+| `src/server.ts`       | Composition root: config → routes → proxy → HTTP server.                                                                                                                      |
 
 ## Run
 

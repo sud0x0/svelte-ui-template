@@ -13,6 +13,8 @@ This template ships **stack, tooling, a test harness, and a real auth model — 
 features.** There is one tiny reference feature (a `/health` call plus an
 authenticated "Recent logs" list). No tasks, categories, or charts.
 
+This is not a "get to production fast" template, this is a "get to production correctly" template.
+
 > **Authentication is implemented — as a token-free Backend-for-Frontend (BFF).**
 > The SPA holds **no tokens of any kind**. A small confidential-client OIDC
 > service (`bff/`) logs the user in with Authorization Code + PKCE, keeps every
@@ -194,20 +196,64 @@ XSS cannot exfiltrate one.
 
 ### The BFF's environment (`BFF_*` — server-side, never in the bundle)
 
-| Variable              | Default                 | Purpose                                                                                                                                                                                                                                                                                              |
-| --------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BFF_PORT`            | `8081`                  | TCP port the BFF listens on.                                                                                                                                                                                                                                                                         |
-| `BFF_PUBLIC_ORIGIN`   | _(required)_            | Absolute **UI origin** the browser reaches the BFF _through_ (Vite `:3000` in dev, Caddy in prod) — **not** the BFF's own `:8081`. `redirect_uri` is derived as `<origin>/auth/callback` and the `__Host-` cookies scope to it. Dev default `http://localhost:3000`.                                 |
-| `BFF_ISSUER_URL`      | _(required)_            | OIDC issuer URL for discovery (`<issuer>/.well-known/openid-configuration`). **Must be `https://`** except for a loopback host (see `BFF_DEV_INSECURE`).                                                                                                                                             |
-| `BFF_CLIENT_ID`       | _(required)_            | OAuth `client_id` registered at the IdP.                                                                                                                                                                                                                                                             |
-| `BFF_CLIENT_SECRET`   | _(required)_            | OAuth `client_secret`. **Confidential client** (BCP §6.1.3.1) — server-side only.                                                                                                                                                                                                                    |
-| `BFF_API_UPSTREAM`    | _(required)_            | Base URL of the Go API the BFF proxies `/api/*` to.                                                                                                                                                                                                                                                  |
-| `BFF_COOKIE_SECRET`   | _(required, ≥32 bytes)_ | HMAC key for the signed double-submit CSRF token (security.md rule 2).                                                                                                                                                                                                                               |
-| `BFF_SCOPES`          | `openid profile email`  | Space-delimited OIDC scopes.                                                                                                                                                                                                                                                                         |
-| `BFF_AUDIENCE`        | _(optional, unset)_     | Access-token audience. When set, sent as the `audience` param on the authorization request and token/refresh grants so the IdP mints an access token whose `aud` the Go API accepts. **MUST equal the Go API's `OIDC_AUDIENCE`.** Leave unset if the IdP sets the access-token audience server-side. |
-| `BFF_DEV_INSECURE`    | _(optional, off)_       | **DEV ONLY.** Set to `true` to allow a **non-loopback** `http://` `BFF_ISSUER_URL`/`BFF_API_UPSTREAM`. By default the BFF fails fast on a plain-http issuer/upstream unless the host is loopback, since those carry the client secret and tokens. Never set in production.                           |
-| `BFF_OIDC_TIMEOUT_MS` | `10000`                 | Timeout (ms, integer in `(0, 60000]`) for the BFF's own IdP calls (discovery/token/refresh), so a hung IdP can't pin `/auth/callback` or stall the refresh queue.                                                                                                                                    |
-| `BFF_TRUSTED_PROXY`   | _(optional, off)_       | Set to `true` when the BFF runs behind a **trusted** reverse proxy (e.g. Caddy) that sets `X-Forwarded-For`. The BFF then preserves the inbound XFF (appending its peer) so the Go API sees the real client IP. Off = directly-exposed BFF, which trusts only its immediate peer.                    |
+| Variable                        | Default                  | Purpose                                                                                                                                                                                                                                                                                              |
+| ------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BFF_PORT`                      | `8081`                   | TCP port the BFF listens on.                                                                                                                                                                                                                                                                         |
+| `BFF_PUBLIC_ORIGIN`             | _(required)_             | Absolute **UI origin** the browser reaches the BFF _through_ (Vite `:3000` in dev, Caddy in prod) — **not** the BFF's own `:8081`. `redirect_uri` is derived as `<origin>/auth/callback` and the `__Host-` cookies scope to it. Dev default `http://localhost:3000`.                                 |
+| `BFF_ISSUER_URL`                | _(required)_             | OIDC issuer URL for discovery (`<issuer>/.well-known/openid-configuration`). **Must be `https://`** except for a loopback host (see `BFF_DEV_INSECURE`).                                                                                                                                             |
+| `BFF_CLIENT_ID`                 | _(required)_             | OAuth `client_id` registered at the IdP.                                                                                                                                                                                                                                                             |
+| `BFF_CLIENT_SECRET`             | _(required)_             | OAuth `client_secret`. **Confidential client** (BCP §6.1.3.1) — server-side only.                                                                                                                                                                                                                    |
+| `BFF_API_UPSTREAM`              | _(required)_             | Base URL of the Go API the BFF proxies `/api/*` to.                                                                                                                                                                                                                                                  |
+| `BFF_COOKIE_SECRET`             | _(required, ≥32 bytes)_  | HMAC key for the signed double-submit CSRF token (security.md rule 2).                                                                                                                                                                                                                               |
+| `BFF_SCOPES`                    | `openid profile email`   | Space-delimited OIDC scopes.                                                                                                                                                                                                                                                                         |
+| `BFF_AUDIENCE`                  | _(optional, unset)_      | Access-token audience. When set, sent as the `audience` param on the authorization request and token/refresh grants so the IdP mints an access token whose `aud` the Go API accepts. **MUST equal the Go API's `OIDC_AUDIENCE`.** Leave unset if the IdP sets the access-token audience server-side. |
+| `BFF_DEV_INSECURE`              | _(optional, off)_        | **DEV ONLY.** Set to `true` to allow a **non-loopback** `http://` `BFF_ISSUER_URL`/`BFF_API_UPSTREAM`. By default the BFF fails fast on a plain-http issuer/upstream unless the host is loopback, since those carry the client secret and tokens. Never set in production.                           |
+| `BFF_OIDC_TIMEOUT_MS`           | `10000`                  | Timeout (ms, integer in `(0, 60000]`) for the BFF's own IdP calls (discovery/token/refresh), so a hung IdP can't pin `/auth/callback` or stall the refresh queue.                                                                                                                                    |
+| `BFF_TRUSTED_PROXY`             | _(optional, off)_        | Set to `true` when the BFF runs behind a **trusted** reverse proxy (e.g. Caddy) that sets `X-Forwarded-For`. The BFF then preserves the inbound XFF (appending its peer) so the Go API sees the real client IP. Off = directly-exposed BFF, which trusts only its immediate peer.                    |
+| `BFF_SESSION_STORE`             | `memory`                 | Session + login-transaction store backend: `memory` (in-process reference, single-instance, non-durable) or `valkey` (shared, durable — see [Session store (production)](#session-store-production)).                                                                                                |
+| `BFF_VALKEY_URL`                | _(required if `valkey`)_ | Valkey connection URL. **`rediss://` (TLS) required for a non-loopback host** (it carries session tokens); `redis://`/`valkey://` allowed for loopback, or off-loopback only with `BFF_DEV_INSECURE=true`. e.g. `rediss://:pass@valkey.internal:6379`.                                               |
+| `BFF_VALKEY_KEY_PREFIX`         | `bff:`                   | Optional key namespace so one Valkey can serve several apps.                                                                                                                                                                                                                                         |
+| `BFF_VALKEY_CONNECT_TIMEOUT_MS` | `10000`                  | Optional connect + per-command timeout (ms, integer in `(0, 60000]`) so a hung/unreachable Valkey cannot pin an `/auth` or `/api` request.                                                                                                                                                           |
+
+### Session store (production)
+
+The BFF keeps two pieces of state server-side: the **session** (the tokens +
+claims behind each `__Host-` cookie) and the short-lived **login transaction**
+(state/nonce/PKCE verifier for an in-flight login). By default both live in an
+**in-process `Map`** — the reference store. That is single-instance and
+**non-durable**: restarting the BFF logs everyone out, and it cannot run behind a
+load balancer across replicas (decisions #18).
+
+For production, switch both to a shared **[Valkey](https://valkey.io)** (the
+BSD-3-licensed Redis fork) so sessions **survive restarts** and multiple BFF
+instances **share state** behind Caddy — this is what enables horizontal scale:
+
+```bash
+# 1. Run Valkey (local dev example — loopback only, plaintext is fine on loopback):
+podman run -p 127.0.0.1:6379:6379 docker.io/valkey/valkey:8-alpine
+
+# 2. Point the BFF at it and start it:
+export BFF_SESSION_STORE=valkey
+export BFF_VALKEY_URL=redis://127.0.0.1:6379   # rediss:// (TLS) required off-loopback
+make bff-dev
+```
+
+**Both** the session and the login-transaction state move to Valkey — deliberately:
+a login started on instance A can have its `/auth/callback` land on instance B, so
+the transaction must be shared, not process-local. Keys are namespaced
+(`bff:sess:*`, `bff:txn:*`) and carry Valkey TTLs so expired records self-evict.
+The move preserves every security property of the reference store: 256-bit CSPRNG
+ids minted server-side, **atomic once-only** transaction consume (`GETDEL`, so a
+replayed callback finds nothing), **reject-at-capacity** for the unauthenticated
+login-transaction store (decisions #20), and **fail-closed** behaviour — a Valkey
+outage reads as "no session" (→ re-login), never as an authenticated request.
+
+- **TLS off-loopback is mandatory** (`rediss://`): the URL carries session tokens.
+  `redis://` is allowed only for a loopback host or with `BFF_DEV_INSECURE=true`.
+- **Bound memory** with a Valkey `maxmemory` + eviction policy (`volatile-ttl` or
+  `allkeys-lru`); sessions rely on TTL, not an in-BFF cap.
+- **`iovalkey`** (the exact-pinned ioredis fork that speaks Valkey) is a
+  **BFF-only** dependency — the browser bundle stays at **zero** runtime deps.
 
 ### IdP setup checklist
 

@@ -133,4 +133,115 @@ describe('BFF config', () => {
     // Any value other than the exact string 'true' does NOT opt in.
     expect(() => loadConfig({ ...insecure, BFF_DEV_INSECURE: '1' })).toThrow(/https/)
   })
+
+  // Session store (decisions #21): default memory, opt into valkey.
+  describe('session store', () => {
+    it('defaults to the in-memory store with sensible valkey knob defaults', () => {
+      const cfg = loadConfig(BASE)
+      expect(cfg.sessionStore).toBe('memory')
+      expect(cfg.valkeyUrl).toBeUndefined()
+      expect(cfg.valkeyKeyPrefix).toBe('bff:')
+      expect(cfg.valkeyConnectTimeoutMs).toBe(10_000)
+    })
+
+    it('rejects an unknown BFF_SESSION_STORE', () => {
+      expect(() => loadConfig({ ...BASE, BFF_SESSION_STORE: 'postgres' })).toThrow(ConfigError)
+      expect(() => loadConfig({ ...BASE, BFF_SESSION_STORE: 'postgres' })).toThrow(
+        /BFF_SESSION_STORE/
+      )
+    })
+
+    it('requires BFF_VALKEY_URL when the store is valkey (named ConfigError)', () => {
+      expect(() => loadConfig({ ...BASE, BFF_SESSION_STORE: 'valkey' })).toThrow(ConfigError)
+      expect(() => loadConfig({ ...BASE, BFF_SESSION_STORE: 'valkey' })).toThrow(/BFF_VALKEY_URL/)
+    })
+
+    it('accepts a loopback redis:// URL and exposes it verbatim', () => {
+      const cfg = loadConfig({
+        ...BASE,
+        BFF_SESSION_STORE: 'valkey',
+        BFF_VALKEY_URL: 'redis://127.0.0.1:6379',
+      })
+      expect(cfg.sessionStore).toBe('valkey')
+      expect(cfg.valkeyUrl).toBe('redis://127.0.0.1:6379')
+    })
+
+    it('requires TLS (rediss://) for a NON-loopback host, like the issuer/upstream', () => {
+      expect(() =>
+        loadConfig({
+          ...BASE,
+          BFF_SESSION_STORE: 'valkey',
+          BFF_VALKEY_URL: 'redis://valkey.internal:6379',
+        })
+      ).toThrow(/rediss/)
+      // rediss:// off-loopback is accepted.
+      expect(
+        loadConfig({
+          ...BASE,
+          BFF_SESSION_STORE: 'valkey',
+          BFF_VALKEY_URL: 'rediss://valkey.internal:6379',
+        }).valkeyUrl
+      ).toBe('rediss://valkey.internal:6379')
+    })
+
+    it('permits a non-loopback plaintext redis:// only with BFF_DEV_INSECURE=true', () => {
+      const base = {
+        ...BASE,
+        BFF_SESSION_STORE: 'valkey',
+        BFF_VALKEY_URL: 'redis://valkey.internal:6379',
+      }
+      expect(() => loadConfig(base)).toThrow(/rediss/)
+      expect(() => loadConfig({ ...base, BFF_DEV_INSECURE: 'true' })).not.toThrow()
+    })
+
+    it('normalises the valkey:// / valkeys:// alias to the redis:// / rediss:// scheme', () => {
+      expect(
+        loadConfig({
+          ...BASE,
+          BFF_SESSION_STORE: 'valkey',
+          BFF_VALKEY_URL: 'valkey://127.0.0.1:6379',
+        }).valkeyUrl
+      ).toBe('redis://127.0.0.1:6379')
+      expect(
+        loadConfig({
+          ...BASE,
+          BFF_SESSION_STORE: 'valkey',
+          BFF_VALKEY_URL: 'valkeys://valkey.internal:6379',
+        }).valkeyUrl
+      ).toBe('rediss://valkey.internal:6379')
+    })
+
+    it('rejects a non-redis(s)/valkey(s) scheme', () => {
+      expect(() =>
+        loadConfig({
+          ...BASE,
+          BFF_SESSION_STORE: 'valkey',
+          BFF_VALKEY_URL: 'http://127.0.0.1:6379',
+        })
+      ).toThrow(ConfigError)
+    })
+
+    it('honours BFF_VALKEY_KEY_PREFIX and validates BFF_VALKEY_CONNECT_TIMEOUT_MS bounds', () => {
+      const valkey = {
+        ...BASE,
+        BFF_SESSION_STORE: 'valkey',
+        BFF_VALKEY_URL: 'redis://127.0.0.1:6379',
+      }
+      expect(loadConfig({ ...valkey, BFF_VALKEY_KEY_PREFIX: 'app1:' }).valkeyKeyPrefix).toBe(
+        'app1:'
+      )
+      expect(
+        loadConfig({ ...valkey, BFF_VALKEY_CONNECT_TIMEOUT_MS: '2500' }).valkeyConnectTimeoutMs
+      ).toBe(2500)
+      expect(() => loadConfig({ ...valkey, BFF_VALKEY_CONNECT_TIMEOUT_MS: '0' })).toThrow(
+        ConfigError
+      )
+      expect(() => loadConfig({ ...valkey, BFF_VALKEY_CONNECT_TIMEOUT_MS: '60001' })).toThrow(
+        ConfigError
+      )
+      expect(() => loadConfig({ ...valkey, BFF_VALKEY_CONNECT_TIMEOUT_MS: '1.5' })).toThrow(
+        ConfigError
+      )
+    })
+  })
 })

@@ -77,9 +77,17 @@ library, PKCE, or token parsing to `src/` — none of that belongs in the browse
 
 The shipped BFF is a faithful **reference**, not turnkey production. Before prod:
 
-- **External session store.** `session.ts` is an in-memory `Map` (decisions #18):
-  restarting logs everyone out and it does not scale horizontally. Swap in Redis
-  (or a signed-cookie store) behind `createSessionStore()` — one seam.
+- **External session store — shipped: set `BFF_SESSION_STORE=valkey`.** The default
+  `session.ts` is an in-memory `Map` (decisions #18): restarting logs everyone out
+  and it does not scale horizontally. The template now ships an OPTIONAL
+  **Valkey**-backed store (`bff/src/valkey-store.ts`, decisions #21) selected at the
+  one seam: set `BFF_SESSION_STORE=valkey` + `BFF_VALKEY_URL=rediss://…` (TLS
+  required off-loopback). BOTH the session and the login-transaction state move to
+  Valkey, so callbacks find their txn across replicas — this is what enables
+  multi-instance / restart-survival. It preserves atomic once-only txn consume
+  (`GETDEL`), reject-at-capacity (#20), and fail-closed-on-outage. Bound Valkey
+  memory with a `maxmemory` + eviction policy. See the README
+  ["Session store (production)"](../../../README.md#session-store-production).
 - **Secret management.** `BFF_CLIENT_SECRET` and `BFF_COOKIE_SECRET` come from the
   environment; source them from a secrets manager (not a checked-in `.env`), and
   rotate them.

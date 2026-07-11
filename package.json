@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.e2e.json && tsc -p tsconfig.bff.json",
-    "bff:build": "esbuild bff/src/server.ts --bundle --platform=node --format=esm --outfile=bff/dist/server.mjs",
+    "bff:build": "esbuild bff/src/server.ts --bundle --platform=node --format=esm --banner:js=\"import{createRequire as __cr}from'module';const require=__cr(import.meta.url);\" --outfile=bff/dist/server.mjs",
     "bff:dev": "node --watch bff/src/server.ts",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
@@ -55,6 +55,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "iovalkey": "0.3.3",
     "openid-client": "6.8.4"
   }
 }

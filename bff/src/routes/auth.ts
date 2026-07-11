@@ -157,24 +157,14 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
         )
       }
 
-      try {
-        const currentUrl = config.publicOrigin + (req.url ?? '')
-        const { tokens, claims } = await oidc.completeLogin(currentUrl, txn)
-        // expiresAt: 0 lets the store apply its own absolute TTL.
-        const sid = await sessions.create({ tokens, claims, expiresAt: 0 })
-        // Belt-and-braces open-redirect defence (security.md rule 1): emit an
-        // ABSOLUTE same-origin URL by STRING-concatenating publicOrigin + the
-        // validated path. `returnTo` already starts with a single `/` (never
-        // `//`), so this is always same-origin — and even a stray `//path` could
-        // not be reinterpreted as protocol-relative once it carries our scheme +
-        // host. NB: do NOT use `new URL(returnTo, publicOrigin)` — that would
-        // resolve a `//host` value BACK to a cross-origin URL.
-        redirect(res, config.publicOrigin + txn.returnTo, [
-          serializeHostCookie(SESSION_COOKIE, sid, { httpOnly: true }),
-          serializeCsrfCookie(csrfToken(config.cookieSecret, sid)),
-          clearTxn,
-        ])
-      } catch {
+      const currentUrl = config.publicOrigin + (req.url ?? '')
+      // ONLY the OIDC completion (state/nonce/PKCE/ID-token validation) maps a
+      // failure to 400 — that is a CLIENT/validation error. Persisting the session
+      // is a separate, SERVER-side step (below): a STORE error there must surface
+      // as a 5xx via server.ts's dispatch crash guard, never a 400 and never a
+      // silent success (decisions #21) — so it stays OUTSIDE this catch.
+      const completed = await oidc.completeLogin(currentUrl, txn).catch(() => null)
+      if (completed === null) {
         // state/nonce/PKCE/ID-token validation failed. Do not leak specifics.
         return sendJson(
           res,
@@ -183,6 +173,26 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
           { 'Set-Cookie': clearTxn }
         )
       }
+
+      // expiresAt: 0 lets the store apply its own absolute TTL. A store error here
+      // propagates → the dispatch crash guard answers 500 (fail-closed on write).
+      const sid = await sessions.create({
+        tokens: completed.tokens,
+        claims: completed.claims,
+        expiresAt: 0,
+      })
+      // Belt-and-braces open-redirect defence (security.md rule 1): emit an
+      // ABSOLUTE same-origin URL by STRING-concatenating publicOrigin + the
+      // validated path. `returnTo` already starts with a single `/` (never
+      // `//`), so this is always same-origin — and even a stray `//path` could
+      // not be reinterpreted as protocol-relative once it carries our scheme +
+      // host. NB: do NOT use `new URL(returnTo, publicOrigin)` — that would
+      // resolve a `//host` value BACK to a cross-origin URL.
+      redirect(res, config.publicOrigin + txn.returnTo, [
+        serializeHostCookie(SESSION_COOKIE, sid, { httpOnly: true }),
+        serializeCsrfCookie(csrfToken(config.cookieSecret, sid)),
+        clearTxn,
+      ])
     },
 
     async logout(req, res) {

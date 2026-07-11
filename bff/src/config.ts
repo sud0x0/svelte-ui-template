@@ -55,6 +55,25 @@ export interface BffConfig {
    * server-side instead. Undefined when `BFF_AUDIENCE` is absent/empty.
    */
   audience?: string
+  /**
+   * Server-side session + login-transaction store backend (decisions #21):
+   * - 'memory' (default): the in-process reference stores (session.ts). Single
+   *   instance, non-durable — sessions evaporate on restart (decisions #18).
+   * - 'valkey': a shared Valkey (RESP) store so sessions survive restarts and are
+   *   shared across BFF replicas. BOTH the session and login-transaction state move.
+   */
+  sessionStore: 'memory' | 'valkey'
+  /**
+   * Valkey connection URL (`redis://` / `rediss://`). Present ONLY when
+   * `sessionStore === 'valkey'`, validated like the issuer/upstream: TLS
+   * (`rediss://`) is required for a non-loopback host unless BFF_DEV_INSECURE — a
+   * production Valkey URL carries session tokens, so plaintext off-loopback fails fast.
+   */
+  valkeyUrl?: string
+  /** Key namespace for Valkey keys (default `bff:`). Lets one Valkey serve many apps. */
+  valkeyKeyPrefix: string
+  /** Connect + per-command timeout (ms) for the Valkey client. Integer in (0, 60000]. */
+  valkeyConnectTimeoutMs: number
 }
 
 function requireEnv(env: NodeJS.ProcessEnv, key: string): string {
@@ -117,6 +136,42 @@ function requireSecureBackendUrl(
 }
 
 /**
+ * Validates a Valkey connection URL with the SAME transport stance as
+ * {@link requireSecureBackendUrl}: TLS is mandatory off-loopback because the URL
+ * carries session tokens. Accepts `redis://`/`valkey://` (plaintext) and
+ * `rediss://`/`valkeys://` (TLS); a non-loopback plaintext URL is rejected unless
+ * BFF_DEV_INSECURE. The `valkey(s)://` alias is normalised to `redis(s)://` so the
+ * RESP client (which speaks redis-scheme URLs and infers TLS from `rediss://`)
+ * accepts it unchanged.
+ */
+function requireValkeyUrl(env: NodeJS.ProcessEnv, key: string, devInsecure: boolean): string {
+  const raw = requireEnv(env, key)
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new ConfigError(`${key} must be a valid URL (got: ${raw})`)
+  }
+  const tls = url.protocol === 'rediss:' || url.protocol === 'valkeys:'
+  const plain = url.protocol === 'redis:' || url.protocol === 'valkey:'
+  if (!tls && !plain) {
+    throw new ConfigError(
+      `${key} must be a redis://, rediss://, valkey:// or valkeys:// URL (got: ${raw})`
+    )
+  }
+  if (plain && !devInsecure && !isLoopbackHost(url.hostname)) {
+    throw new ConfigError(
+      `${key} must use rediss:// (TLS) for a non-loopback host; plain redis:// is ` +
+        `allowed only for a loopback host, or set BFF_DEV_INSECURE=true (DEV ONLY). Got ${raw}.`
+    )
+  }
+  // Normalise the valkey(s):// alias to the redis(s):// scheme the RESP client speaks.
+  if (url.protocol === 'valkey:') url.protocol = 'redis:'
+  else if (url.protocol === 'valkeys:') url.protocol = 'rediss:'
+  return url.toString()
+}
+
+/**
  * Reads and validates the environment — the ONE `process.env` read site. Called
  * exactly once, by server.ts (the composition root). Every other module takes
  * its config as a parameter, so unit tests drive them with an explicit
@@ -173,6 +228,30 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
   // only enable when the BFF genuinely sits behind a trusted proxy (e.g. Caddy).
   const trustedProxy = env.BFF_TRUSTED_PROXY === 'true'
 
+  // Session/txn store backend (decisions #21). Explicit switch, default 'memory'
+  // so a fresh clone is unchanged. Only when 'valkey' is BFF_VALKEY_URL required.
+  const sessionStore = env.BFF_SESSION_STORE ?? 'memory'
+  if (sessionStore !== 'memory' && sessionStore !== 'valkey') {
+    throw new ConfigError(`BFF_SESSION_STORE must be 'memory' or 'valkey' (got: ${sessionStore})`)
+  }
+  const valkeyUrl =
+    sessionStore === 'valkey' ? requireValkeyUrl(env, 'BFF_VALKEY_URL', devInsecure) : undefined
+  const valkeyKeyPrefix = env.BFF_VALKEY_KEY_PREFIX ?? 'bff:'
+
+  // Bound the Valkey connect + per-command time so a hung/unreachable Valkey
+  // cannot pin an /auth or /api request. Integer ms in (0, 60000].
+  const valkeyTimeoutRaw = env.BFF_VALKEY_CONNECT_TIMEOUT_MS ?? '10000'
+  const valkeyConnectTimeoutMs = Number(valkeyTimeoutRaw)
+  if (
+    !Number.isInteger(valkeyConnectTimeoutMs) ||
+    valkeyConnectTimeoutMs <= 0 ||
+    valkeyConnectTimeoutMs > 60000
+  ) {
+    throw new ConfigError(
+      `BFF_VALKEY_CONNECT_TIMEOUT_MS must be an integer in (0, 60000] ms (got: ${valkeyTimeoutRaw})`
+    )
+  }
+
   return {
     port,
     publicOrigin,
@@ -189,5 +268,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
     cookieSecret,
     scopes: env.BFF_SCOPES ?? 'openid profile email',
     ...(audience ? { audience } : {}),
+    sessionStore,
+    ...(valkeyUrl ? { valkeyUrl } : {}),
+    valkeyKeyPrefix,
+    valkeyConnectTimeoutMs,
   }
 }

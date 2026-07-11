@@ -9,7 +9,12 @@ import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { randomUUID } from 'node:crypto'
 import { loadConfig, type BffConfig } from './config.ts'
-import { createSessionStore } from './session.ts'
+import { createSessionStore, type SessionStore, type TxnStore } from './session.ts'
+import {
+  createValkeySessionStore,
+  createValkeyTxnStore,
+  type ValkeyClient,
+} from './valkey-store.ts'
 import { createOidc } from './oidc.ts'
 import { createAuthRoutes, type AuthRoutes } from './routes/auth.ts'
 import { createProxy, type Proxy } from './proxy.ts'
@@ -158,6 +163,95 @@ export function createApp(deps: AppDeps): RequestListener {
   }
 }
 
+/** The session + login-transaction stores plus a shutdown hook for their backend. */
+interface StoreBundle {
+  sessions: SessionStore
+  /** undefined → createAuthRoutes builds its own in-memory txn store (memory mode). */
+  txns?: TxnStore
+  /** Closes the backing client on shutdown (no-op in memory mode). */
+  quit(): Promise<void>
+}
+
+/** Rejects if `p` does not settle within `ms`. The timer is unref'd so it never pins the loop. */
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+    timer.unref()
+    p.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e: unknown) => {
+        clearTimeout(timer)
+        reject(e instanceof Error ? e : new Error(String(e)))
+      }
+    )
+  })
+}
+
+/** A Valkey URL may embed credentials — log only scheme + host:port, never the userinfo. */
+function redactValkeyUrl(raw: string): string {
+  try {
+    const u = new URL(raw)
+    return `${u.protocol}//${u.host}`
+  } catch {
+    return 'valkey'
+  }
+}
+
+/**
+ * Builds the session + txn stores from config (decisions #21). Default 'memory'
+ * returns the in-process reference stores unchanged; 'valkey' constructs the ONE
+ * iovalkey client here (the single seam — no route/proxy ever reads env or builds
+ * a client) and FAILS FAST if the initial connection cannot be made. iovalkey is
+ * imported dynamically so the default memory path never loads it.
+ */
+async function buildStores(config: BffConfig): Promise<StoreBundle> {
+  if (config.sessionStore !== 'valkey') {
+    console.log('bff session store: memory (in-process, single-instance, non-durable)')
+    return { sessions: createSessionStore(), quit: () => Promise.resolve() }
+  }
+
+  const { default: Valkey } = await import('iovalkey')
+  const client = new Valkey(config.valkeyUrl as string, {
+    connectTimeout: config.valkeyConnectTimeoutMs,
+    commandTimeout: config.valkeyConnectTimeoutMs,
+    // Bound per-request retries so a command fails FAST (→ the adapters' fail-closed
+    // paths) instead of queueing indefinitely while Valkey is unreachable.
+    maxRetriesPerRequest: 2,
+    // Connect explicitly below so a bad initial connection fails fast.
+    lazyConnect: true,
+  })
+  // Keep a transient client error from crashing the process; log the MESSAGE only
+  // — never keys, values, or tokens (security.md logging rule).
+  client.on('error', (err: Error) => {
+    console.error('valkey client error:', err.message)
+  })
+
+  // Never boot half-configured (mirrors createOidc's discovery-at-startup stance):
+  // fail fast if Valkey is unreachable, bounding the initial connect so a
+  // black-holed host cannot hang boot forever.
+  try {
+    await withTimeout(
+      client.connect(),
+      config.valkeyConnectTimeoutMs,
+      'valkey initial connection timed out'
+    )
+  } catch (err) {
+    client.disconnect() // stop retry timers so the process can exit cleanly
+    throw err instanceof Error ? err : new Error('valkey connection failed')
+  }
+
+  console.log(`bff session store: valkey (${redactValkeyUrl(config.valkeyUrl as string)})`)
+  const c = client as unknown as ValkeyClient
+  return {
+    sessions: createValkeySessionStore(c, { keyPrefix: config.valkeyKeyPrefix }),
+    txns: createValkeyTxnStore(c, { keyPrefix: config.valkeyKeyPrefix }),
+    quit: () => client.quit().then(() => undefined),
+  }
+}
+
 async function main(): Promise<void> {
   const config = loadConfig()
   // Enable openid-client's insecure-transport path only for an http issuer. This
@@ -165,9 +259,14 @@ async function main(): Promise<void> {
   // loopback host or BFF_DEV_INSECURE=true (item 3) — so reaching here with an
   // http issuer already means dev/loopback, never a silent production downgrade.
   const oidc = await createOidc(config, { allowInsecure: config.issuerUrl.startsWith('http://') })
-  const sessions = createSessionStore()
-  const authRoutes = createAuthRoutes({ config, oidc, sessions })
-  const proxy = createProxy({ config, sessions, oidc })
+  const stores = await buildStores(config)
+  const authRoutes = createAuthRoutes({
+    config,
+    oidc,
+    sessions: stores.sessions,
+    txns: stores.txns,
+  })
+  const proxy = createProxy({ config, sessions: stores.sessions, oidc })
 
   const server: Server = createServer(createApp({ config, authRoutes, proxy }))
   hardenServer(server) // request/headers timeouts + per-socket request cap (fix 5)
@@ -175,11 +274,13 @@ async function main(): Promise<void> {
     console.log(`bff listening on :${config.port} (upstream ${config.apiUpstream})`)
   })
 
-  // Graceful shutdown: stop accepting connections, then exit. A hard cap ensures
-  // we never hang a deploy if a connection refuses to drain.
+  // Graceful shutdown: stop accepting connections, close the store client, then
+  // exit. A hard cap ensures we never hang a deploy if something refuses to drain.
   const shutdown = (signal: string): void => {
     console.log(`${signal} received, shutting down`)
-    server.close(() => process.exit(0))
+    server.close(() => {
+      void stores.quit().finally(() => process.exit(0))
+    })
     setTimeout(() => process.exit(1), 5000).unref()
   }
   process.on('SIGTERM', () => shutdown('SIGTERM'))
