@@ -33,6 +33,15 @@ export interface BffConfig {
   apiUpstream: string
   /** Timeout in ms for a proxied upstream (Go API) call, so a hung upstream cannot pin a BFF connection. */
   apiTimeoutMs: number
+  /** Timeout in ms for the BFF's OWN openid-client calls to the IdP (discovery/token/refresh) (fix 9). */
+  oidcTimeoutMs: number
+  /**
+   * When true, the BFF runs behind a TRUSTED reverse proxy (e.g. Caddy) and
+   * PRESERVES the inbound `X-Forwarded-For` (appending its own peer) so the Go API
+   * sees the real client IP. When false (default, directly-exposed BFF) it strips
+   * the inbound XFF and sets it to its immediate un-spoofable peer (fix 11).
+   */
+  trustedProxy: boolean
   /** HMAC key for the signed double-submit CSRF token (security.md rule 2). ≥32 bytes. */
   cookieSecret: string
   /** Space-delimited OIDC scopes. */
@@ -141,6 +150,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
     )
   }
 
+  // Bound the BFF's OWN calls to the IdP (discovery/token/refresh) so a hung IdP
+  // cannot pin /auth/callback or stall the refresh queue (fix 9). Integer ms in
+  // (0, 60000].
+  const oidcTimeoutRaw = env.BFF_OIDC_TIMEOUT_MS ?? '10000'
+  const oidcTimeoutMs = Number(oidcTimeoutRaw)
+  if (!Number.isInteger(oidcTimeoutMs) || oidcTimeoutMs <= 0 || oidcTimeoutMs > 60000) {
+    throw new ConfigError(
+      `BFF_OIDC_TIMEOUT_MS must be an integer in (0, 60000] ms (got: ${oidcTimeoutRaw})`
+    )
+  }
+
   // Optional: only include when non-empty so `audience` is genuinely undefined
   // (not an empty string) when unset, and the OIDC layer can branch on presence.
   const audience = env.BFF_AUDIENCE?.trim()
@@ -148,6 +168,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
   // Opt-in to plain http for NON-loopback issuer/upstream (dev only). Loopback
   // http is always allowed; anything else over http fails fast (item 3).
   const devInsecure = env.BFF_DEV_INSECURE === 'true'
+
+  // Trust the immediate reverse proxy's X-Forwarded-For (fix 11). Off by default:
+  // only enable when the BFF genuinely sits behind a trusted proxy (e.g. Caddy).
+  const trustedProxy = env.BFF_TRUSTED_PROXY === 'true'
 
   return {
     port,
@@ -160,6 +184,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BffConfig {
     clientSecret: requireEnv(env, 'BFF_CLIENT_SECRET'),
     apiUpstream: requireSecureBackendUrl(env, 'BFF_API_UPSTREAM', devInsecure),
     apiTimeoutMs,
+    oidcTimeoutMs,
+    trustedProxy,
     cookieSecret,
     scopes: env.BFF_SCOPES ?? 'openid profile email',
     ...(audience ? { audience } : {}),

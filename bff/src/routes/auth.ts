@@ -48,11 +48,18 @@ export function validateReturnTo(raw: string | null | undefined, origin: string)
 }
 
 /**
- * Maps validated ID-token claims to the SPA's CurrentUser. Deliberately mirrors
- * go-api-template's `mapClaimsToRoles` (internal/middleware/auth_middleware.go):
- * roles = the de-duplicated UNION of the `roles` and `groups` claims, empties
- * filtered. `displayName` is the first present of name/preferred_username/email/sub.
- * Exported for testing.
+ * Maps validated ID-token claims to the SPA's CurrentUser: `roles` = the
+ * de-duplicated UNION of the `roles` and `groups` claims (empties filtered);
+ * `displayName` = the first present of name/preferred_username/email/sub.
+ *
+ * IMPORTANT (fix 5): these roles are for the SPA's UX ONLY and are NOT
+ * authoritative. This union used to mirror go-api-template's `mapClaimsToRoles`,
+ * but the Go API is now DENY-BY-DEFAULT: authorization runs through an OPA policy
+ * against an EMPTY allowlist, so a claim like `groups: ["admin"]` grants NOTHING
+ * at the API until an operator adds it to the policy (go-api-template
+ * decisions.md #18). `/auth/me` may therefore report a role the API will refuse —
+ * NEVER gate a real capability on `CurrentUser.roles`; the Go API is the sole
+ * authorization owner. Exported for testing.
  */
 export function mapClaimsToUser(claims: Claims): {
   id: string
@@ -91,8 +98,9 @@ export interface AuthRoutesDeps {
 export interface AuthRoutes {
   login(req: IncomingMessage, res: ServerResponse): Promise<void>
   callback(req: IncomingMessage, res: ServerResponse): Promise<void>
-  logout(req: IncomingMessage, res: ServerResponse): void
-  me(req: IncomingMessage, res: ServerResponse): void
+  // logout/me are async too (fix 12): they await the now-async session store.
+  logout(req: IncomingMessage, res: ServerResponse): Promise<void>
+  me(req: IncomingMessage, res: ServerResponse): Promise<void>
 }
 
 export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
@@ -105,7 +113,11 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
       const returnTo = validateReturnTo(url.searchParams.get('return_to'), config.publicOrigin)
 
       const { authorizationUrl, transaction } = await oidc.beginLogin()
-      const txnId = txns.create({ ...transaction, returnTo, expiresAt: Date.now() + TXN_TTL_MS })
+      const txnId = await txns.create({
+        ...transaction,
+        returnTo,
+        expiresAt: Date.now() + TXN_TTL_MS,
+      })
       if (txnId === null) {
         // The login-transaction store is at capacity (a flood). REFUSE rather than
         // evict a legitimate in-flight login (item 6). A per-IP edge rate limit on
@@ -135,7 +147,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
       const clearTxn = clearHostCookie(TXN_COOKIE, { httpOnly: true })
       const txnId = cookies(req)[TXN_COOKIE]
       // Consume ONCE — deleted before use, so a replayed callback finds nothing.
-      const txn = txnId ? txns.consume(txnId) : undefined
+      const txn = txnId ? await txns.consume(txnId) : undefined
       if (!txn) {
         return sendJson(
           res,
@@ -149,7 +161,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
         const currentUrl = config.publicOrigin + (req.url ?? '')
         const { tokens, claims } = await oidc.completeLogin(currentUrl, txn)
         // expiresAt: 0 lets the store apply its own absolute TTL.
-        const sid = sessions.create({ tokens, claims, expiresAt: 0 })
+        const sid = await sessions.create({ tokens, claims, expiresAt: 0 })
         // Belt-and-braces open-redirect defence (security.md rule 1): emit an
         // ABSOLUTE same-origin URL by STRING-concatenating publicOrigin + the
         // validated path. `returnTo` already starts with a single `/` (never
@@ -173,7 +185,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
       }
     },
 
-    logout(req, res) {
+    async logout(req, res) {
       const sid = cookies(req)[SESSION_COOKIE] ?? ''
       // CSRF-protected (unsafe method): Sec-Fetch-Site gate, then signed token.
       const guard = guardUnsafeRequest({
@@ -190,8 +202,8 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
         )
       }
 
-      const session = sid ? sessions.get(sid) : undefined
-      if (sid) sessions.destroy(sid)
+      const session = sid ? await sessions.get(sid) : undefined
+      if (sid) await sessions.destroy(sid)
       const clearCookies = [clearHostCookie(SESSION_COOKIE, { httpOnly: true }), clearCsrfCookie()]
 
       // RP-initiated logout when the IdP advertises end_session_endpoint; else 204.
@@ -202,9 +214,9 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
       return sendEmpty(res, 204, { 'Set-Cookie': clearCookies })
     },
 
-    me(req, res) {
+    async me(req, res) {
       const sid = cookies(req)[SESSION_COOKIE]
-      const session = sid ? sessions.get(sid) : undefined
+      const session = sid ? await sessions.get(sid) : undefined
       if (!session) {
         // The Go 401 envelope so the SPA's centralised 401 -> login seam fires.
         return unauthorised(res, 'no active session')

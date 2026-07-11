@@ -75,6 +75,26 @@ describe('BFF config', () => {
     expect(() => loadConfig({ ...BASE, BFF_API_TIMEOUT_MS: 'nope' })).toThrow(ConfigError)
   })
 
+  // Fix 9: the OIDC call timeout is validated exactly like the upstream timeout.
+  it('defaults the OIDC timeout to 10000ms and accepts a valid override', () => {
+    expect(loadConfig(BASE).oidcTimeoutMs).toBe(10_000)
+    expect(loadConfig({ ...BASE, BFF_OIDC_TIMEOUT_MS: '2500' }).oidcTimeoutMs).toBe(2500)
+  })
+
+  it('rejects an out-of-range or non-integer OIDC timeout', () => {
+    expect(() => loadConfig({ ...BASE, BFF_OIDC_TIMEOUT_MS: '0' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...BASE, BFF_OIDC_TIMEOUT_MS: '60001' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...BASE, BFF_OIDC_TIMEOUT_MS: '1.5' })).toThrow(ConfigError)
+    expect(() => loadConfig({ ...BASE, BFF_OIDC_TIMEOUT_MS: 'nope' })).toThrow(ConfigError)
+  })
+
+  // Fix 11: trusted-proxy is an explicit opt-in, off by default.
+  it('defaults trustedProxy to false and honours the exact BFF_TRUSTED_PROXY=true', () => {
+    expect(loadConfig(BASE).trustedProxy).toBe(false)
+    expect(loadConfig({ ...BASE, BFF_TRUSTED_PROXY: 'true' }).trustedProxy).toBe(true)
+    expect(loadConfig({ ...BASE, BFF_TRUSTED_PROXY: '1' }).trustedProxy).toBe(false)
+  })
+
   it('leaves audience undefined when BFF_AUDIENCE is unset or blank, passes it through when set', () => {
     expect(loadConfig(BASE).audience).toBeUndefined()
     expect(loadConfig({ ...BASE, BFF_AUDIENCE: '   ' }).audience).toBeUndefined()

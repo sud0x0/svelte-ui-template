@@ -13,7 +13,8 @@ describe('auth stubs (disabled mode)', () => {
     expect(location.href).toBe(before)
   })
 
-  it('logout is a documented no-op that resolves', async () => {
-    await expect(logout()).resolves.toBeUndefined()
+  it('logout is a documented no-op that resolves false (no navigation)', async () => {
+    // In disabled mode logout does nothing and reports it did not navigate away.
+    await expect(logout()).resolves.toBe(false)
   })
 })

@@ -29,6 +29,16 @@ describe('router helpers', () => {
     expect(normalisePath('')).toBe('/')
   })
 
+  it('strips query/hash for route matching (fix 13)', () => {
+    expect(normalisePath('/route?x=1')).toBe('/route')
+    expect(normalisePath('/route#y')).toBe('/route')
+    expect(normalisePath('/route/?x=1')).toBe('/route')
+    expect(normalisePath('/a?b#c')).toBe('/a')
+    // Params come from the pathname, not the query.
+    expect(matchRoutes('/items/42?x=1', defs)?.params).toEqual({ id: '42' })
+    expect(matchRoutes('/items/42#frag', defs)?.params).toEqual({ id: '42' })
+  })
+
   it('compiles patterns with named params', () => {
     const { regex, keys } = compilePattern('/items/:id')
     expect(keys).toEqual(['id'])
@@ -75,6 +85,20 @@ describe('router navigation', () => {
     navigate('/login')
     expect(location.pathname).toBe('/login')
     expect(currentPath()).toBe('/login')
+  })
+
+  it('navigate to a route WITH query/hash resolves the route, keeps it in the URL, and is not 404 (fix 13)', async () => {
+    navigate('/login?tab=2')
+    // Address bar keeps the query; routing matched the pathname.
+    expect(location.pathname).toBe('/login')
+    expect(location.search).toBe('?tab=2')
+    expect(currentPath()).toBe('/login')
+    await vi.waitFor(() => expect(isNotFound()).toBe(false))
+
+    navigate('/login#section')
+    expect(location.pathname).toBe('/login')
+    expect(location.hash).toBe('#section')
+    await vi.waitFor(() => expect(isNotFound()).toBe(false))
   })
 
   it('popstate (back/forward) updates currentPath', async () => {

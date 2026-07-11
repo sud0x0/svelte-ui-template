@@ -1,4 +1,4 @@
-import { request } from './client'
+import { request, clearLoginLoopMarker } from './client'
 import { config } from '../config'
 import { navigate } from '../stores/router.svelte'
 import { assertCurrentUser, type CurrentUser } from '../types/api'
@@ -68,27 +68,41 @@ export function login(returnTo?: string): void {
 }
 
 /**
- * Logs out.
+ * Logs out. Returns `true` when it started a FULL-PAGE navigation (the IdP's
+ * `end_session_endpoint`) — in that case the caller MUST NOT mutate app state
+ * afterwards (fix 7).
+ *
  * - `bff` mode: `POST /auth/logout` (the client attaches the CSRF header). The
  *   BFF clears the `__Host-` session + `csrf` cookies and, when the IdP supports
  *   RP-initiated logout, replies `200 { logout_url }`. We follow that URL as a
  *   full-page navigation (it leaves our origin for the IdP's
- *   `end_session_endpoint`). With no `end_session_endpoint` the BFF replies `204`
- *   and we just return to the app root via the client-side router.
- * - `disabled` mode: documented no-op.
+ *   `end_session_endpoint`) and return `true`. With no `end_session_endpoint` the
+ *   BFF replies `204` and we return to the app root client-side, returning `false`.
+ * - `disabled` mode: documented no-op, returns `false`.
+ *
+ * RACE (fix 7): the caller must NOT `clearAuthUser()` after an end_session
+ * navigation. Clearing sets `authStatus()` to `idle`, which re-arms the
+ * RouteGuard's effect → `GET /auth/me` → 401 → the client's `login()` seam →
+ * a SECOND navigation that cancels the in-flight end_session redirect, leaving the
+ * IdP SSO session alive. Returning `true` here lets `Home` skip that clear.
  */
-export async function logout(): Promise<void> {
+export async function logout(): Promise<boolean> {
   if (config.authMode === 'bff') {
+    // A deliberate sign-out is not a login loop: clear the loop marker so the
+    // post-logout /auth/me 401 redirects to sign-in normally instead of being
+    // mistaken for the audience-mismatch loop (fix 7 + fix 8).
+    clearLoginLoopMarker()
     // 204 -> request() resolves undefined; 200 -> the { logout_url } envelope.
     const result = await request<{ logout_url?: string } | undefined>('/auth/logout', {
       method: 'POST',
     })
     if (result?.logout_url !== undefined) {
       window.location.assign(result.logout_url)
-    } else {
-      navigate('/')
+      return true // navigated away — caller must not touch app state
     }
-    return
+    navigate('/')
+    return false
   }
   // disabled mode: no-op.
+  return false
 }

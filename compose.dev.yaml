@@ -42,7 +42,10 @@ services:
       - '8081:8081'
     environment:
       BFF_PORT: '8081'
-      BFF_PUBLIC_ORIGIN: ${BFF_PUBLIC_ORIGIN:-http://localhost:8081}
+      # The UI origin the browser reaches the BFF THROUGH (Vite :3000 proxies
+      # /auth,/api,/health to the BFF), NOT the BFF's own :8081. redirect_uri and
+      # the __Host- cookies are scoped to this origin (fix 1).
+      BFF_PUBLIC_ORIGIN: ${BFF_PUBLIC_ORIGIN:-http://localhost:3000}
       BFF_ISSUER_URL: ${BFF_ISSUER_URL}
       BFF_CLIENT_ID: ${BFF_CLIENT_ID}
       BFF_CLIENT_SECRET: ${BFF_CLIENT_SECRET}
@@ -52,6 +55,14 @@ services:
       BFF_API_TIMEOUT_MS: ${BFF_API_TIMEOUT_MS:-10000}
       BFF_COOKIE_SECRET: ${BFF_COOKIE_SECRET}
       BFF_SCOPES: ${BFF_SCOPES:-openid profile email}
+      # Access-token audience — MUST equal go-api-template's OIDC_AUDIENCE or the
+      # Go API 401s every proxied call. Empty by default (unset) (fix 3).
+      BFF_AUDIENCE: ${BFF_AUDIENCE:-}
+      # DEV ONLY: this dev compose defaults BFF_API_UPSTREAM to a NON-loopback
+      # plain-http host (host.containers.internal), which requireSecureBackendUrl
+      # would otherwise reject — so opt into insecure transport by default HERE
+      # (dev compose only). Never set true in production (fix 2).
+      BFF_DEV_INSECURE: ${BFF_DEV_INSECURE:-true}
 
 volumes:
   node_modules:

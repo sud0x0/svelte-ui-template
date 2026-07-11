@@ -13,8 +13,16 @@ import { login } from '../../src/lib/api/auth'
 
 describe('api client', () => {
   afterEach(() => {
-    // Clear the CSRF cookie between tests.
+    // Clear the CSRF cookie + the login-loop marker between tests.
     document.cookie = 'csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'
+    try {
+      sessionStorage.removeItem('bff:lastLoginRedirect')
+    } catch {
+      /* ignore */
+    }
+    // Clear call history (login is a vi.fn from the module mock) so the
+    // loop-breaker test's `not.toHaveBeenCalled()` doesn't see an earlier call.
+    vi.clearAllMocks()
     vi.restoreAllMocks()
   })
 
@@ -29,6 +37,21 @@ describe('api client', () => {
 
     await request('/api/ping')
     expect(credentials).toBe('include')
+  })
+
+  it('sends a fresh X-Request-ID on every request (fix 6)', async () => {
+    const ids: (string | null)[] = []
+    worker.use(
+      http.get('/api/ping', ({ request }) => {
+        ids.push(request.headers.get('X-Request-ID'))
+        return HttpResponse.json({ ok: true })
+      })
+    )
+    await request('/api/ping')
+    await request('/api/ping')
+    expect(ids[0]).toBeTruthy()
+    expect(ids[1]).toBeTruthy()
+    expect(ids[0]).not.toBe(ids[1]) // a new correlation id per request
   })
 
   it('attaches X-CSRF-Token on unsafe methods and not on GET', async () => {
@@ -90,5 +113,15 @@ describe('api client', () => {
 
     await expect(request('/api/secure')).rejects.toBeTruthy()
     expect(login).toHaveBeenCalledWith('/items/42?tab=x')
+  })
+
+  it('breaks the login loop: a 401 right after a login redirect surfaces an error, does NOT re-login (fix 8)', async () => {
+    // Simulate "we just returned from a login redirect".
+    sessionStorage.setItem('bff:lastLoginRedirect', String(Date.now()))
+    worker.use(http.get('/api/secure', () => new HttpResponse(null, { status: 401 })))
+
+    // A distinct error (NOT `unauthorised`), and login() is NOT fired again.
+    await expect(request('/api/secure')).rejects.toMatchObject({ error: 'login_failed' })
+    expect(login).not.toHaveBeenCalled()
   })
 })

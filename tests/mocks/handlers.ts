@@ -3,7 +3,10 @@ import { http, HttpResponse } from 'msw'
 // Default MSW handlers — the happy-path API boundary the app talks to with no
 // real backend. Individual tests add/override with `worker.use(...)`.
 export const handlers = [
-  http.get('/health', () => HttpResponse.json({ status: 'ok', version: 'test' })),
+  // Mirrors go-api-template's real /health shape: `{ status: 'healthy' }` (NOT
+  // `{ status: 'ok' }`). Keeping the mock faithful to the real API stops a drift
+  // where the SPA renders a value the backend never returns (fix 4).
+  http.get('/health', () => HttpResponse.json({ status: 'healthy' })),
 
   // The BFF /auth/me. Used only under VITE_AUTH_MODE='bff'; in disabled mode the
   // app never calls it (getCurrentUser resolves the dev user locally).

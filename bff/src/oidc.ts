@@ -76,6 +76,16 @@ export async function createOidc(
   config: BffConfig,
   options: CreateOidcOptions = {}
 ): Promise<OidcClient> {
+  // Bound EVERY IdP call (fix 9). openid-client's `timeout` (in SECONDS) applies
+  // to discovery AND is copied onto the resolved Configuration, so it also bounds
+  // authorizationCodeGrant / refreshTokenGrant — under the hood an
+  // AbortSignal.timeout on each request. A hung IdP can no longer pin
+  // /auth/callback or stall the single-flight refresh queue.
+  const discoveryOptions: client.DiscoveryRequestOptions = {
+    timeout: config.oidcTimeoutMs / 1000,
+  }
+  if (options.allowInsecure) discoveryOptions.execute = [client.allowInsecureRequests]
+
   const configuration = await client.discovery(
     new URL(config.issuerUrl),
     config.clientId,
@@ -83,7 +93,7 @@ export async function createOidc(
     // Confidential client: authenticate to the token endpoint with the secret in
     // the POST body (client_secret_post). Server-side only.
     client.ClientSecretPost(config.clientSecret),
-    options.allowInsecure ? { execute: [client.allowInsecureRequests] } : undefined
+    discoveryOptions
   )
 
   // When an audience is configured, send it as the `audience` request parameter

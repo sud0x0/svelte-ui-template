@@ -51,7 +51,17 @@ describe('validateReturnTo (open-redirect guard, security.md rule 1)', () => {
   })
 })
 
-describe('mapClaimsToUser (mirror of go mapClaimsToRoles)', () => {
+describe('mapClaimsToUser (UX-only roles; the Go API is deny-by-default)', () => {
+  // Tripwire (fix 5): the BFF surfaces the RAW claimed roles/groups for the SPA's
+  // UX and does NOT filter them to an authorization allowlist — that is the Go
+  // API's job (deny-by-default OPA policy, go-api-template decisions.md #18). If
+  // someone made the BFF start filtering roles here (pretending to authorize), an
+  // unlisted group like `superuser` would vanish and this test would trip.
+  it('surfaces the claimed groups verbatim (does NOT allowlist-filter them)', () => {
+    const user = mapClaimsToUser({ sub: 's1', groups: ['superuser', 'nonsense-team'] })
+    expect(user.roles).toEqual(['superuser', 'nonsense-team'])
+  })
+
   it('unions roles ∪ groups, de-duplicated, empties removed', () => {
     const user = mapClaimsToUser({
       sub: 's1',
@@ -126,6 +136,8 @@ describe('auth routes (confidential OIDC flow)', () => {
       clientSecret: idp.clientSecret,
       apiUpstream: 'http://127.0.0.1:1', // unused here
       apiTimeoutMs: 10_000,
+      oidcTimeoutMs: 10_000,
+      trustedProxy: false,
       cookieSecret: 'unit-test-cookie-secret-32-bytes!!',
       scopes: 'openid profile email',
     }
@@ -194,6 +206,8 @@ describe('auth routes (confidential OIDC flow)', () => {
 
     const meRes = await fetch(`${base}/auth/me`, { headers: { cookie: `__Host-session=${sid}` } })
     expect(meRes.status).toBe(200)
+    // Authenticated JSON is never cached (ASVS V8.2, fix 10).
+    expect(meRes.headers.get('cache-control')).toBe('no-store')
     expect(await meRes.json()).toEqual({
       id: 'user-123',
       displayName: 'Ada Lovelace',
@@ -326,6 +340,8 @@ describe('auth routes with a configured audience (item 3)', () => {
       clientSecret: idp.clientSecret,
       apiUpstream: 'http://127.0.0.1:1',
       apiTimeoutMs: 10_000,
+      oidcTimeoutMs: 10_000,
+      trustedProxy: false,
       cookieSecret: 'unit-test-cookie-secret-32-bytes!!',
       scopes: 'openid profile email',
       audience: AUDIENCE,
@@ -375,6 +391,8 @@ describe('login at transaction-store capacity (item 6)', () => {
       clientSecret: 's',
       apiUpstream: 'http://up.test',
       apiTimeoutMs: 10_000,
+      oidcTimeoutMs: 10_000,
+      trustedProxy: false,
       cookieSecret: 'unit-test-cookie-secret-32-bytes!!',
       scopes: 'openid',
     }
@@ -390,7 +408,11 @@ describe('login at transaction-store capacity (item 6)', () => {
       endSessionUrl: () => '',
     }
     // A txn store that is always "full": create() refuses.
-    const fullTxns: TxnStore = { create: () => null, consume: () => undefined, size: () => 0 }
+    const fullTxns: TxnStore = {
+      create: () => Promise.resolve(null),
+      consume: () => Promise.resolve(undefined),
+      size: () => Promise.resolve(0),
+    }
     const routes = createAuthRoutes({
       config,
       oidc,

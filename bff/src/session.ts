@@ -29,17 +29,21 @@ export interface SessionData {
   expiresAt: number
 }
 
+// The store interface is ASYNC (Promise-returning) so production can swap the
+// in-memory Map for Redis / a database / an encrypted-cookie store at ONE seam
+// with no call-site changes (decisions.md #18, fix 12). The shipped in-memory
+// implementation just wraps synchronous Map ops in resolved promises.
 export interface SessionStore {
   /** Creates a session, returns its opaque 256-bit id. */
-  create(data: SessionData): string
+  create(data: SessionData): Promise<string>
   /** Returns the live session, or undefined if unknown/expired (expired ones are evicted). */
-  get(id: string): SessionData | undefined
+  get(id: string): Promise<SessionData | undefined>
   /** Replaces a session's data in place (e.g. after a token refresh). No-op if unknown. */
-  update(id: string, data: SessionData): void
+  update(id: string, data: SessionData): Promise<void>
   /** Destroys a session (logout, refresh failure). Idempotent. */
-  destroy(id: string): void
+  destroy(id: string): Promise<void>
   /** Test/introspection helper: number of live records. */
-  size(): number
+  size(): Promise<number>
 }
 
 /** Scheduler signature for the periodic sweep (injectable so tests avoid real timers). */
@@ -114,25 +118,27 @@ export function createSessionStore(opts: SessionStoreOptions = {}): SessionStore
       // encoding. An unguessable id is the session's only secret on the wire.
       const id = randomBytes(32).toString('base64url')
       store.set(id, { ...data, expiresAt: data.expiresAt || now() + ttlMs })
-      return id
+      return Promise.resolve(id)
     },
     get(id) {
       const data = store.get(id)
-      if (data === undefined) return undefined
+      if (data === undefined) return Promise.resolve(undefined)
       if (data.expiresAt <= now()) {
         store.delete(id)
-        return undefined
+        return Promise.resolve(undefined)
       }
-      return data
+      return Promise.resolve(data)
     },
     update(id, data) {
       if (store.has(id)) store.set(id, data)
+      return Promise.resolve()
     },
     destroy(id) {
       store.delete(id)
+      return Promise.resolve()
     },
     size() {
-      return store.size
+      return Promise.resolve(store.size)
     },
   }
 }
@@ -156,12 +162,14 @@ export interface LoginTransaction {
   expiresAt: number
 }
 
+// Async for the same reason as SessionStore (fix 12): a production txn store can
+// live in Redis behind this interface unchanged.
 export interface TxnStore {
   /** Creates a transaction and returns its id, or `null` when the store is at capacity. */
-  create(txn: LoginTransaction): string | null
+  create(txn: LoginTransaction): Promise<string | null>
   /** Deletes AND returns the transaction (once-only); undefined if unknown/expired. */
-  consume(id: string): LoginTransaction | undefined
-  size(): number
+  consume(id: string): Promise<LoginTransaction | undefined>
+  size(): Promise<number>
 }
 
 export interface TxnStoreOptions {
@@ -197,22 +205,22 @@ export function createTxnStore(opts: TxnStoreOptions = {}): TxnStore {
       // would drop a legitimate in-flight login. Refuse the new txn instead and
       // let the caller answer 503. Pair with a per-IP edge rate limit on
       // /auth/login (Caddyfile) so this cap is effectively unreachable in practice.
-      if (store.size >= maxEntries) return null
+      if (store.size >= maxEntries) return Promise.resolve(null)
       const id = randomBytes(32).toString('base64url')
       store.set(id, txn)
-      return id
+      return Promise.resolve(id)
     },
     consume(id) {
       const txn = store.get(id)
       // Delete BEFORE returning — even an expired hit is removed, and a second
       // callback with the same id gets undefined (replay-safe).
       store.delete(id)
-      if (txn === undefined) return undefined
-      if (txn.expiresAt <= now()) return undefined
-      return txn
+      if (txn === undefined) return Promise.resolve(undefined)
+      if (txn.expiresAt <= now()) return Promise.resolve(undefined)
+      return Promise.resolve(txn)
     },
     size() {
-      return store.size
+      return Promise.resolve(store.size)
     },
   }
 }

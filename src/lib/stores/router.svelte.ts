@@ -27,12 +27,25 @@ export interface RouteMatch {
 
 // --- Pure, testable helpers -------------------------------------------------
 
-/** Normalises a path: leading slash, no trailing slash (except root). */
+/**
+ * Normalises a path for ROUTE MATCHING: strips any query string / hash, then
+ * ensures a leading slash and no trailing slash (except root).
+ *
+ * Stripping search/hash is load-bearing (fix 13): the route table matches on the
+ * pathname only, so without this a deep link like `/login?tab=2` or `/items/42#x`
+ * would match no route and flip the 404 view while the address bar still shows a
+ * valid route. `navigate()` preserves the search/hash in the URL separately.
+ */
 export function normalisePath(path: string): string {
-  let p = path
+  let p = path.replace(/[?#].*$/s, '')
   if (!p.startsWith('/')) p = '/' + p
   if (p.length > 1) p = p.replace(/\/+$/, '')
   return p || '/'
+}
+
+/** The `?search#hash` suffix of a path (for preserving it in the address bar). */
+function pathSuffix(path: string): string {
+  return path.match(/[?#].*$/s)?.[0] ?? ''
 }
 
 /**
@@ -217,8 +230,12 @@ async function resolve(to: string, kind: NavKind = 'push'): Promise<void> {
 /** Navigates to a path, pushing browser history. */
 export function navigate(to: string): void {
   const target = normalisePath(to)
-  if (target !== normalisePath(location.pathname)) {
-    history.pushState({}, '', target)
+  // Route matching uses `target` (pathname only), but the ADDRESS BAR keeps the
+  // caller's query/hash so `/login?tab=2` stays a valid, shareable URL (fix 13).
+  const url = target + pathSuffix(to)
+  const current = location.pathname + location.search + location.hash
+  if (url !== current) {
+    history.pushState({}, '', url)
   }
   void resolve(target, 'push')
 }

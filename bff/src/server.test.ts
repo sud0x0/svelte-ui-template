@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { BffConfig } from './config.ts'
 import type { AuthRoutes } from './routes/auth.ts'
@@ -19,6 +19,8 @@ function baseConfig(): BffConfig {
     clientSecret: 's',
     apiUpstream: 'http://upstream.test',
     apiTimeoutMs: 10_000,
+    oidcTimeoutMs: 10_000,
+    trustedProxy: false,
     cookieSecret: 'server-test-cookie-secret-32byte!',
     scopes: 'openid',
   }
@@ -29,10 +31,6 @@ const okAsync = (_req: IncomingMessage, res: ServerResponse): Promise<void> => {
   res.end('{"ok":true}')
   return Promise.resolve()
 }
-const okSync = (_req: IncomingMessage, res: ServerResponse): void => {
-  res.writeHead(200, { 'Content-Type': 'application/json' })
-  res.end('{"ok":true}')
-}
 
 interface Harness {
   base: string
@@ -42,11 +40,12 @@ interface Harness {
 async function mount(
   over: { authRoutes?: Partial<AuthRoutes>; proxy?: Partial<Proxy> } = {}
 ): Promise<Harness> {
+  // All AuthRoutes handlers are async now (fix 12).
   const authRoutes: AuthRoutes = {
     login: over.authRoutes?.login ?? okAsync,
     callback: over.authRoutes?.callback ?? okAsync,
-    logout: over.authRoutes?.logout ?? okSync,
-    me: over.authRoutes?.me ?? okSync,
+    logout: over.authRoutes?.logout ?? okAsync,
+    me: over.authRoutes?.me ?? okAsync,
   }
   const proxy: Proxy = {
     api: over.proxy?.api ?? okAsync,
@@ -97,5 +96,51 @@ describe('createApp — handler crash guard', () => {
 
     const alive = await fetch(`${h.base}/health`)
     expect(alive.status).toBe(200)
+  })
+
+  // Fix 6: the correlation id is generated-if-absent, forwarded upstream, echoed
+  // on the response, and logged.
+  it('generates + forwards + logs + echoes an X-Request-ID when the client omits one', async () => {
+    const logs: string[] = []
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((m: unknown) => {
+      logs.push(String(m))
+    })
+    let forwarded: string | undefined
+    h = await mount({
+      proxy: {
+        api: (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+          forwarded = req.headers['x-request-id'] as string | undefined
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end('{"ok":true}')
+          return Promise.resolve()
+        },
+      },
+    })
+
+    const res = await fetch(`${h.base}/api/x`) // no X-Request-ID sent
+    expect(res.status).toBe(200)
+    const echoed = res.headers.get('x-request-id')
+    expect(echoed).toBeTruthy() // generated
+    expect(forwarded).toBe(echoed) // forwarded upstream, same id
+    await vi.waitFor(() => expect(logs.some((l) => l.includes(`rid=${echoed}`))).toBe(true))
+    logSpy.mockRestore()
+  })
+
+  it('preserves a client-provided X-Request-ID', async () => {
+    let forwarded: string | undefined
+    h = await mount({
+      proxy: {
+        api: (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+          forwarded = req.headers['x-request-id'] as string | undefined
+          res.writeHead(204)
+          res.end()
+          return Promise.resolve()
+        },
+      },
+    })
+
+    const res = await fetch(`${h.base}/api/x`, { headers: { 'x-request-id': 'client-rid-1' } })
+    expect(res.headers.get('x-request-id')).toBe('client-rid-1')
+    expect(forwarded).toBe('client-rid-1')
   })
 })

@@ -40,8 +40,12 @@
   let modalOpen = $state(false)
 
   async function handleLogout() {
-    await logout()
-    clearAuthUser()
+    // If logout() started a full-page end_session navigation it returns true;
+    // do NOT clearAuthUser() then, or the guard/401-login seam re-arms and its
+    // competing navigation cancels the end_session redirect (fix 7). On a 204
+    // (no end_session) logout returns false and we clear the store here.
+    const navigatedAway = await logout()
+    if (!navigatedAway) clearAuthUser()
   }
 
   const user = $derived(authUser())

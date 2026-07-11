@@ -1,12 +1,13 @@
 import { createServer, type RequestListener, type Server, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
+import { randomUUID } from 'node:crypto'
 import { loadConfig, type BffConfig } from './config.ts'
 import { createSessionStore } from './session.ts'
 import { createOidc } from './oidc.ts'
 import { createAuthRoutes, type AuthRoutes } from './routes/auth.ts'
 import { createProxy, type Proxy } from './proxy.ts'
-import { sendJson } from './http.ts'
+import { header, sendJson } from './http.ts'
 
 // The composition root: config -> oidc -> routes -> proxy -> HTTP server. This
 // is the ONLY module that reads the environment (via loadConfig) and the only
@@ -62,11 +63,19 @@ export function createApp(deps: AppDeps): RequestListener {
     const url = new URL(req.url ?? '/', deps.config.publicOrigin)
     const path = url.pathname
 
-    // Log method, path, status, and duration ONLY — never headers, never
-    // cookies, never tokens. (security.md — no session material in logs.)
+    // Correlation id (fix 6): use the client's X-Request-ID, or GENERATE one if
+    // absent, so the chain UI -> BFF -> Go API is traceable. Write it back onto
+    // the request so the proxy forwards THIS id upstream, echo it on the response,
+    // and include it in the log line. It is an opaque id, never session material.
+    const requestId = header(req, 'x-request-id') ?? randomUUID()
+    req.headers['x-request-id'] = requestId
+    res.setHeader('X-Request-ID', requestId)
+
+    // Log method, path, status, duration, and the correlation id ONLY — never
+    // other headers, cookies, or tokens. (security.md — no session material in logs.)
     res.on('finish', () => {
       const ms = Math.round(performance.now() - started)
-      console.log(`${method} ${path} ${res.statusCode} ${ms}ms`)
+      console.log(`${method} ${path} ${res.statusCode} ${ms}ms rid=${requestId}`)
     })
 
     if (path === '/auth/login' && method === 'GET')

@@ -37,6 +37,7 @@ let lastAccessToken = null // the token most recently minted; the API checks it
 let logsStatus = 200 // flippable via /_control to exercise the 403 path
 let logsPostCount = 0 // proves the BFF rejects an unsafe write before proxying
 let lastForwarding = {} // forwarding headers the upstream saw (item 2 proof)
+let endSessionCount = 0 // proves logout reaches the IdP end_session endpoint (fix 7)
 
 // Forwarding/trust headers the BFF MUST strip before proxying to this "Go API".
 const FORWARDING_HEADERS = [
@@ -161,12 +162,14 @@ const server = createServer((req, res) => {
     }
 
     if (path === '/end-session') {
+      endSessionCount += 1 // fix 7: proves the RP-initiated logout actually landed here
       res.writeHead(302, { Location: url.searchParams.get('post_logout_redirect_uri') ?? '/' })
       return res.end()
     }
 
     // --- Stub upstream Go API ---
-    if (path === '/health') return json(res, 200, { status: 'ok', version: 'e2e-stub' })
+    // Mirror go-api-template's real /health shape: `{ status: 'healthy' }` (fix 4).
+    if (path === '/health') return json(res, 200, { status: 'healthy' })
 
     if (path === '/api/v1/logs' && (req.method ?? 'GET') === 'GET') {
       // Record which forwarding/trust headers actually arrived (item 2 proof).
@@ -212,7 +215,11 @@ const server = createServer((req, res) => {
       return json(res, 200, { logsStatus })
     }
     if (path === '/_control/state') {
-      return json(res, 200, { logsPostCount, hasMintedToken: lastAccessToken !== null })
+      return json(res, 200, {
+        logsPostCount,
+        endSessionCount,
+        hasMintedToken: lastAccessToken !== null,
+      })
     }
     if (path === '/_control/last-forwarding') {
       return json(res, 200, lastForwarding)
@@ -221,6 +228,7 @@ const server = createServer((req, res) => {
       logsStatus = 200
       logsPostCount = 0
       lastForwarding = {}
+      endSessionCount = 0
       return json(res, 200, { ok: true })
     }
 

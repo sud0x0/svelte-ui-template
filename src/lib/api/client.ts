@@ -38,6 +38,46 @@ function currentReturnTo(): string {
   return location.pathname + location.search
 }
 
+// Loop breaker (fix 8). An unconditional 401 -> login() redirect loops forever
+// when the BFF session is valid but the Go API rejects its bearer (e.g. an
+// audience mismatch): login -> re-auth -> 401 -> login -> … We stamp the time of
+// each login redirect in sessionStorage — a NON-sensitive marker, never a token
+// or session id, so security.md rule 3 permits it — and if a 401 arrives within
+// this window of the last redirect, we surface an error instead of redirecting.
+const LOGIN_REDIRECT_KEY = 'bff:lastLoginRedirect'
+const LOGIN_LOOP_WINDOW_MS = 10_000
+
+function markLoginRedirect(): void {
+  try {
+    sessionStorage.setItem(LOGIN_REDIRECT_KEY, String(Date.now()))
+  } catch {
+    // sessionStorage unavailable (private mode): the breaker degrades to the
+    // pre-fix behaviour. Acceptable — it just can't detect the loop.
+  }
+}
+
+function loopedRightAfterLogin(): boolean {
+  try {
+    const last = Number(sessionStorage.getItem(LOGIN_REDIRECT_KEY) ?? '0')
+    return last > 0 && Date.now() - last < LOGIN_LOOP_WINDOW_MS
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Clears the login-loop marker. Called on LOGOUT (auth.ts): a deliberate sign-out
+ * is NOT a login loop, so a post-logout 401 must redirect to sign-in normally
+ * rather than being mistaken for the audience-mismatch loop (fix 7 + fix 8).
+ */
+export function clearLoginLoopMarker(): void {
+  try {
+    sessionStorage.removeItem(LOGIN_REDIRECT_KEY)
+  } catch {
+    /* sessionStorage unavailable — nothing to clear */
+  }
+}
+
 async function toApiError(response: Response): Promise<ApiError> {
   const text = await response.text()
   try {
@@ -76,6 +116,13 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     headers.set('Content-Type', 'application/json')
   }
 
+  // Correlation id (fix 6): tag every request so the chain UI -> BFF -> Go API is
+  // traceable in logs. The BFF forwards this id (and generates one itself if a
+  // caller ever omits it); the Go API logs it. A fresh id per request.
+  if (!headers.has('X-Request-ID')) {
+    headers.set('X-Request-ID', crypto.randomUUID())
+  }
+
   // CSRF defence in depth on state-changing requests. SameSite=Strict is
   // necessary but, per OWASP, not sufficient alone — so we attach a second
   // control. Present now; inert until the BFF sets the cookie.
@@ -96,7 +143,21 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   // no-op, so this simply surfaces the error; under VITE_AUTH_MODE='bff' it
   // hands off to the BFF login redirect, preserving the current location.
   if (response.status === 401) {
-    // TODO(auth): this is the single place the SPA reacts to "not authenticated".
+    if (loopedRightAfterLogin()) {
+      // We JUST returned from a login redirect and STILL got 401 (fix 8) — the
+      // session authenticates but the API keeps refusing (e.g. audience mismatch).
+      // Redirecting again would loop forever, so surface a DISTINCT error instead.
+      // The code is deliberately NOT `unauthorised`, so the auth store treats it
+      // as a real error state, not a perpetual "Redirecting…" (see auth.svelte.ts).
+      void response.body?.cancel()
+      const err: ApiError = {
+        error: 'login_failed',
+        message: 'Signed in, but the server refused access. Please try again later.',
+      }
+      throw err
+    }
+    // Record the redirect so an immediate repeat 401 is caught above, then hand off.
+    markLoginRedirect()
     login(currentReturnTo())
     throw await toApiError(response)
   }

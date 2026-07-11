@@ -26,7 +26,14 @@ export function sendJson(
   extra: ExtraHeaders = {}
 ): void {
   const payload = JSON.stringify(body)
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...extra })
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    // Authenticated BFF JSON (notably /auth/me's id/email/roles) must never be
+    // cached by the browser or an intermediary (ASVS V8.2, fix 10). `extra` can
+    // still override per-response if a caller ever needs to.
+    'Cache-Control': 'no-store',
+    ...extra,
+  })
   res.end(payload)
 }
 

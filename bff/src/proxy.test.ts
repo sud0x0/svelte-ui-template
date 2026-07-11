@@ -23,6 +23,8 @@ function baseConfig(): BffConfig {
     clientSecret: 's',
     apiUpstream: 'http://upstream.test',
     apiTimeoutMs: 10_000,
+    oidcTimeoutMs: 10_000,
+    trustedProxy: false,
     cookieSecret: SECRET,
     scopes: 'openid',
   }
@@ -64,6 +66,7 @@ interface Harness {
 async function mount(opts: {
   oidc?: OidcClient
   respond?: (req: { url: string; headers: Headers }) => Response
+  config?: BffConfig
 }): Promise<Harness> {
   const captured: { url: string; headers: Headers }[] = []
   const sessions = createSessionStore()
@@ -78,7 +81,7 @@ async function mount(opts: {
   }) as typeof fetch
 
   const proxy = createProxy({
-    config: baseConfig(),
+    config: opts.config ?? baseConfig(),
     sessions,
     oidc: opts.oidc ?? fakeOidc(),
     fetchImpl,
@@ -108,7 +111,7 @@ describe('authenticated proxy', () => {
 
   it('attaches the session bearer and STRIPS inbound Authorization + Cookie', async () => {
     h = await mount({})
-    const sid = h.sessions.create(session(tokens({ accessToken: 'the-real-token' })))
+    const sid = await h.sessions.create(session(tokens({ accessToken: 'the-real-token' })))
     const res = await fetch(`${h.base}/api/v1/logs?limit=10`, {
       headers: {
         cookie: `__Host-session=${sid}`,
@@ -128,7 +131,7 @@ describe('authenticated proxy', () => {
 
   it('strips inbound forwarding headers and re-sets a single trusted X-Forwarded-For (item 2)', async () => {
     h = await mount({})
-    const sid = h.sessions.create(session(tokens()))
+    const sid = await h.sessions.create(session(tokens()))
     const res = await fetch(`${h.base}/api/v1/logs`, {
       headers: {
         cookie: `__Host-session=${sid}`,
@@ -153,6 +156,19 @@ describe('authenticated proxy', () => {
     expect(xff).not.toBe('9.9.9.9')
   })
 
+  it('trusted-proxy mode PRESERVES the inbound X-Forwarded-For and appends the peer (fix 11)', async () => {
+    h = await mount({ config: { ...baseConfig(), trustedProxy: true } })
+    const sid = await h.sessions.create(session(tokens()))
+    const res = await fetch(`${h.base}/api/v1/logs`, {
+      headers: { cookie: `__Host-session=${sid}`, 'x-forwarded-for': '203.0.113.7' },
+    })
+    expect(res.status).toBe(200)
+    const xff = h.captured[0].headers.get('x-forwarded-for')
+    // The trusted upstream chain is preserved (real client first), peer appended.
+    expect(xff).not.toBeNull()
+    expect(xff!.startsWith('203.0.113.7, ')).toBe(true)
+  })
+
   it('no session -> the Go 401 envelope, byte-for-byte, and does NOT proxy', async () => {
     h = await mount({})
     const res = await fetch(`${h.base}/api/v1/logs`)
@@ -165,7 +181,7 @@ describe('authenticated proxy', () => {
     h = await mount({
       respond: () => new Response('{"error":"forbidden"}', { status: 403 }),
     })
-    const sid = h.sessions.create(session(tokens()))
+    const sid = await h.sessions.create(session(tokens()))
     const res = await fetch(`${h.base}/api/v1/logs`, {
       headers: { cookie: `__Host-session=${sid}` },
     })
@@ -191,7 +207,7 @@ describe('authenticated proxy', () => {
       },
     })
     h = await mount({ oidc })
-    const sid = h.sessions.create(session(tokens({ accessTokenExpiresAt: Date.now() }))) // expiring now
+    const sid = await h.sessions.create(session(tokens({ accessTokenExpiresAt: Date.now() }))) // expiring now
 
     const [a, b] = await Promise.all([
       fetch(`${h.base}/api/x`, { headers: { cookie: `__Host-session=${sid}` } }),
@@ -206,23 +222,23 @@ describe('authenticated proxy', () => {
     expect(
       h.captured.every((c) => c.headers.get('authorization') === 'Bearer refreshed-access')
     ).toBe(true)
-    expect(h.sessions.get(sid)?.tokens.refreshToken).toBe('refresh-rotated')
+    expect((await h.sessions.get(sid))?.tokens.refreshToken).toBe('refresh-rotated')
   })
 
   it('destroys the session and answers 401 when refresh fails', async () => {
     const oidc = fakeOidc({ refresh: () => Promise.reject(new Error('invalid_grant')) })
     h = await mount({ oidc })
-    const sid = h.sessions.create(session(tokens({ accessTokenExpiresAt: Date.now() })))
+    const sid = await h.sessions.create(session(tokens({ accessTokenExpiresAt: Date.now() })))
     const res = await fetch(`${h.base}/api/x`, { headers: { cookie: `__Host-session=${sid}` } })
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'unauthorised', message: 'session expired' })
-    expect(h.sessions.get(sid)).toBeUndefined()
+    expect(await h.sessions.get(sid)).toBeUndefined()
     expect(h.captured).toHaveLength(0) // never proxied
   })
 
   it('rejects an unsafe /api write without a valid CSRF token, and accepts it with one', async () => {
     h = await mount({})
-    const sid = h.sessions.create(session(tokens()))
+    const sid = await h.sessions.create(session(tokens()))
     const noToken = await fetch(`${h.base}/api/v1/logs`, {
       method: 'POST',
       headers: { cookie: `__Host-session=${sid}`, 'sec-fetch-site': 'same-origin' },
@@ -253,7 +269,7 @@ describe('authenticated proxy', () => {
         return new Response('{"ok":true}', { status: 200 })
       },
     })
-    const sid = h.sessions.create(session(tokens()))
+    const sid = await h.sessions.create(session(tokens()))
 
     // Fast path: the timeout signal does not affect a prompt response.
     const fast = await fetch(`${h.base}/api/fast`, { headers: { cookie: `__Host-session=${sid}` } })
@@ -267,7 +283,7 @@ describe('authenticated proxy', () => {
 
   it('rejects an unsafe /api write labelled Sec-Fetch-Site: cross-site', async () => {
     h = await mount({})
-    const sid = h.sessions.create(session(tokens()))
+    const sid = await h.sessions.create(session(tokens()))
     const res = await fetch(`${h.base}/api/v1/logs`, {
       method: 'POST',
       headers: {
@@ -289,7 +305,7 @@ describe('authenticated proxy', () => {
           headers: { 'set-cookie': '__Host-session=evil; Path=/' },
         }),
     })
-    const sid = h.sessions.create(session(tokens()))
+    const sid = await h.sessions.create(session(tokens()))
     const res = await fetch(`${h.base}/api/v1/logs`, {
       headers: { cookie: `__Host-session=${sid}` },
     })
@@ -306,7 +322,7 @@ describe('authenticated proxy', () => {
         throw new TypeError('fetch failed')
       },
     })
-    const sid = h.sessions.create(session(tokens()))
+    const sid = await h.sessions.create(session(tokens()))
     const res = await fetch(`${h.base}/api/v1/logs`, {
       headers: { cookie: `__Host-session=${sid}` },
     })
@@ -324,7 +340,7 @@ describe('authenticated proxy', () => {
       },
     })
     h = await mount({ respond: () => new Response(brokenBody, { status: 200 }) })
-    const sid = h.sessions.create(session(tokens()))
+    const sid = await h.sessions.create(session(tokens()))
     await expect(
       fetch(`${h.base}/api/v1/logs`, { headers: { cookie: `__Host-session=${sid}` } }).then((r) =>
         r.text()

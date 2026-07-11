@@ -133,8 +133,8 @@ export function createProxy(deps: ProxyDeps): Proxy {
       // invariant across refresh, but this keeps the write correct). update()
       // no-ops when the session is gone, so a session destroyed mid-flight is
       // never resurrected.
-      const current = sessions.get(sid) ?? session
-      sessions.update(sid, { ...current, tokens: rotated })
+      const current = (await sessions.get(sid)) ?? session
+      await sessions.update(sid, { ...current, tokens: rotated })
       return rotated
     } catch {
       return null
@@ -146,20 +146,29 @@ export function createProxy(deps: ProxyDeps): Proxy {
     res: ServerResponse,
     accessToken: string | undefined
   ): Promise<void> {
+    // Capture the inbound X-Forwarded-For BEFORE the strip loop removes it (it is
+    // in STRIP_REQUEST_HEADERS). Its trustworthiness depends on the topology (below).
+    const inboundXff = header(req, 'x-forwarded-for')
+
     const headers = new Headers()
     for (const [name, value] of Object.entries(req.headers)) {
       if (value === undefined || STRIP_REQUEST_HEADERS.has(name.toLowerCase())) continue
       // X-Request-ID and other tracing/content headers pass through here.
       for (const v of Array.isArray(value) ? value : [value]) headers.append(name, v)
     }
-    // Set a SINGLE trusted X-Forwarded-For from the immediate peer's address
-    // (req.socket.remoteAddress) AFTER stripping any inbound value, so the Go API
-    // sees an un-spoofable client IP (item 2). NOTE: behind a trusted reverse
-    // proxy (Caddy) the immediate peer is the PROXY, not the browser — preserving
-    // the real client IP through a trusted-proxy chain is an operator decision
-    // (a trusted-proxy allowlist), deliberately out of scope for this reference.
-    const clientIp = req.socket.remoteAddress
-    if (clientIp !== undefined && clientIp !== '') headers.set('X-Forwarded-For', clientIp)
+    // X-Forwarded-For (item 2 + fix 11). The immediate peer address is always
+    // un-spoofable, so it anchors the chain either way:
+    //   - directly-exposed BFF (default): the client IS the peer, so the inbound
+    //     XFF is attacker-controlled — DISCARD it and set XFF = peer only.
+    //   - behind a TRUSTED proxy (config.trustedProxy, e.g. Caddy sets XFF to the
+    //     real client): the inbound XFF is trustworthy — PRESERVE it and APPEND
+    //     the peer, so the Go API sees `<client>, <proxy>` for per-IP audit/limit.
+    const clientIp = req.socket.remoteAddress ?? ''
+    if (config.trustedProxy && inboundXff) {
+      headers.set('X-Forwarded-For', clientIp ? `${inboundXff}, ${clientIp}` : inboundXff)
+    } else if (clientIp) {
+      headers.set('X-Forwarded-For', clientIp)
+    }
     // The ONLY credential the upstream sees. Absent on health passthrough.
     if (accessToken !== undefined) headers.set('Authorization', `Bearer ${accessToken}`)
 
@@ -223,7 +232,7 @@ export function createProxy(deps: ProxyDeps): Proxy {
   return {
     async api(req, res) {
       const sid = cookies(req)[SESSION_COOKIE]
-      const session = sid ? sessions.get(sid) : undefined
+      const session = sid ? await sessions.get(sid) : undefined
       if (!sid || !session) {
         // No session -> the Go 401 envelope; do NOT proxy. The SPA's client sees
         // 401 and fires login(returnTo).
@@ -249,7 +258,7 @@ export function createProxy(deps: ProxyDeps): Proxy {
       if (tokens === null) {
         // Refresh failed (invalid_grant / network): kill the session and answer
         // 401 with cleared cookies so the SPA restarts login.
-        sessions.destroy(sid)
+        await sessions.destroy(sid)
         return unauthorised(res, 'session expired', {
           'Set-Cookie': [clearHostCookie(SESSION_COOKIE, { httpOnly: true }), clearCsrfCookie()],
         })

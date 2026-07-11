@@ -36,6 +36,7 @@ test.beforeEach(async ({ request }) => {
 test('logs in through the IdP, proxies logs with the server-side bearer, keeps the session HttpOnly, and logs out', async ({
   page,
   context,
+  request,
 }) => {
   await page.goto('/')
   // Signed out first: the IdP login page, not the app.
@@ -67,6 +68,14 @@ test('logs in through the IdP, proxies logs with the server-side bearer, keeps t
   await expect(page.getByRole('link', { name: /sign in as ada/i })).toBeVisible()
   const afterCookies = await context.cookies()
   expect(afterCookies.find((c) => c.name === '__Host-session')).toBeUndefined()
+
+  // Fix 7: the RP-initiated logout MUST reach the IdP end_session endpoint — the
+  // race (a re-armed 401->login navigation) would cancel that redirect and leave
+  // the IdP SSO session alive.
+  const state = (await request.get(`${STUB}/_control/state`).then((r) => r.json())) as {
+    endSessionCount: number
+  }
+  expect(state.endSessionCount).toBe(1)
 })
 
 test('an unsafe /api write without the CSRF header is rejected by the BFF, and never reaches the API', async ({

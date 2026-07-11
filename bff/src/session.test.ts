@@ -79,56 +79,56 @@ describe('parseCookies', () => {
   })
 })
 
-describe('in-memory session store', () => {
-  it('creates a session, returns a 256-bit base64url id, and reads it back', () => {
+describe('in-memory session store (async interface, fix 12)', () => {
+  it('creates a session, returns a 256-bit base64url id, and reads it back', async () => {
     const store = createSessionStore({ now: () => 1000 })
-    const id = store.create(sampleSession({ expiresAt: 0 }))
+    const id = await store.create(sampleSession({ expiresAt: 0 }))
     // 32 bytes base64url -> 43 chars (no padding).
     expect(id).toHaveLength(43)
     expect(id).toMatch(/^[A-Za-z0-9_-]+$/)
-    expect(store.get(id)?.claims.sub).toBe('user-1')
-    expect(store.size()).toBe(1)
+    expect((await store.get(id))?.claims.sub).toBe('user-1')
+    expect(await store.size()).toBe(1)
   })
 
-  it('mints distinct ids', () => {
+  it('mints distinct ids', async () => {
     const store = createSessionStore()
-    expect(store.create(sampleSession())).not.toBe(store.create(sampleSession()))
+    expect(await store.create(sampleSession())).not.toBe(await store.create(sampleSession()))
   })
 
-  it('evicts and hides an expired session', () => {
+  it('evicts and hides an expired session', async () => {
     let clock = 1000
     const store = createSessionStore({ now: () => clock })
-    const id = store.create(sampleSession({ expiresAt: 2000 }))
-    expect(store.get(id)).toBeDefined()
+    const id = await store.create(sampleSession({ expiresAt: 2000 }))
+    expect(await store.get(id)).toBeDefined()
     clock = 2001
-    expect(store.get(id)).toBeUndefined()
-    expect(store.size()).toBe(0)
+    expect(await store.get(id)).toBeUndefined()
+    expect(await store.size()).toBe(0)
   })
 
-  it('updates tokens in place and destroys idempotently', () => {
+  it('updates tokens in place and destroys idempotently', async () => {
     const store = createSessionStore({ now: () => 0 })
-    const id = store.create(sampleSession({ expiresAt: 10_000 }))
+    const id = await store.create(sampleSession({ expiresAt: 10_000 }))
     const next = sampleSession({
       expiresAt: 10_000,
       tokens: { accessToken: 'a2', accessTokenExpiresAt: 5000 },
     })
-    store.update(id, next)
-    expect(store.get(id)?.tokens.accessToken).toBe('a2')
-    store.destroy(id)
-    expect(store.get(id)).toBeUndefined()
-    store.destroy(id) // no throw
+    await store.update(id, next)
+    expect((await store.get(id))?.tokens.accessToken).toBe('a2')
+    await store.destroy(id)
+    expect(await store.get(id)).toBeUndefined()
+    await store.destroy(id) // no throw
   })
 
-  it('defaults expiresAt to now + ttl when not provided', () => {
+  it('defaults expiresAt to now + ttl when not provided', async () => {
     const store = createSessionStore({ now: () => 1000, ttlMs: 500 })
-    const id = store.create(sampleSession({ expiresAt: 0 }))
+    const id = await store.create(sampleSession({ expiresAt: 0 }))
     // Still alive at now, gone after ttl.
-    expect(store.get(id)).toBeDefined()
+    expect(await store.get(id)).toBeDefined()
   })
 })
 
 describe('store memory bounding (item 4)', () => {
-  it('sweeps expired sessions WITHOUT any lookup', () => {
+  it('sweeps expired sessions WITHOUT any lookup', async () => {
     let clock = 1000
     let sweep: () => void = () => {}
     const store = createSessionStore({
@@ -137,24 +137,25 @@ describe('store memory bounding (item 4)', () => {
         sweep = fn
       },
     })
-    store.create(sampleSession({ expiresAt: 2000 }))
-    store.create(sampleSession({ expiresAt: 9000 }))
-    expect(store.size()).toBe(2)
+    await store.create(sampleSession({ expiresAt: 2000 }))
+    await store.create(sampleSession({ expiresAt: 9000 }))
+    expect(await store.size()).toBe(2)
 
     clock = 2001
     sweep() // periodic sweep — no get() call drives this eviction
-    expect(store.size()).toBe(1)
+    expect(await store.size()).toBe(1)
   })
 
-  it('caps live sessions by evicting the oldest', () => {
+  it('caps live sessions by evicting the oldest', async () => {
     const store = createSessionStore({ maxEntries: 3, now: () => 1000, startSweep: noSweep })
-    const ids = Array.from({ length: 4 }, () => store.create(sampleSession({ expiresAt: 10_000 })))
-    expect(store.size()).toBe(3)
-    expect(store.get(ids[0])).toBeUndefined() // oldest evicted by the cap
-    expect(store.get(ids[3])).toBeDefined() // newest kept (not expired at now=1000)
+    const ids: string[] = []
+    for (let i = 0; i < 4; i++) ids.push(await store.create(sampleSession({ expiresAt: 10_000 })))
+    expect(await store.size()).toBe(3)
+    expect(await store.get(ids[0])).toBeUndefined() // oldest evicted by the cap
+    expect(await store.get(ids[3])).toBeDefined() // newest kept (not expired at now=1000)
   })
 
-  it('sweeps expired transactions WITHOUT any lookup', () => {
+  it('sweeps expired transactions WITHOUT any lookup', async () => {
     let clock = 1000
     let sweep: () => void = () => {}
     const store = createTxnStore({
@@ -163,26 +164,26 @@ describe('store memory bounding (item 4)', () => {
         sweep = fn
       },
     })
-    store.create(sampleTxn({ expiresAt: 2000 }))
-    store.create(sampleTxn({ expiresAt: 9000 }))
-    expect(store.size()).toBe(2)
+    await store.create(sampleTxn({ expiresAt: 2000 }))
+    await store.create(sampleTxn({ expiresAt: 9000 }))
+    expect(await store.size()).toBe(2)
 
     clock = 2001
     sweep() // no consume() call drives this eviction
-    expect(store.size()).toBe(1)
+    expect(await store.size()).toBe(1)
   })
 
-  it('caps live transactions by REJECTING new ones (never evicting an in-flight login)', () => {
+  it('caps live transactions by REJECTING new ones (never evicting an in-flight login)', async () => {
     const store = createTxnStore({ maxEntries: 2, now: () => 1000, startSweep: noSweep })
-    const first = store.create(sampleTxn({ expiresAt: 9000 }))
-    const second = store.create(sampleTxn({ expiresAt: 9000 }))
-    const overflow = store.create(sampleTxn({ expiresAt: 9000 })) // exceeds cap 2
+    const first = await store.create(sampleTxn({ expiresAt: 9000 }))
+    const second = await store.create(sampleTxn({ expiresAt: 9000 }))
+    const overflow = await store.create(sampleTxn({ expiresAt: 9000 })) // exceeds cap 2
     expect(first).not.toBeNull()
     expect(second).not.toBeNull()
     expect(overflow).toBeNull() // rejected, not evicting the oldest
-    expect(store.size()).toBe(2)
+    expect(await store.size()).toBe(2)
     // The two earlier (in-flight) transactions survive and are still consumable.
-    expect(store.consume(first as string)).toBeDefined()
+    expect(await store.consume(first as string)).toBeDefined()
   })
 
   it('startUnrefInterval schedules an unref-ed timer so the process can exit', () => {

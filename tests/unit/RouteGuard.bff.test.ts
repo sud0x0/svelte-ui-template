@@ -45,6 +45,13 @@ describe('RouteGuard (bff mode, real client 401 seam)', () => {
     // The auth store is a module-level singleton; reset it to 'idle' so each
     // test's guard effect actually re-resolves through its own MSW handler.
     clearAuthUser()
+    // Clear the client's login-loop marker (fix 8) — the first test's login seam
+    // stamps it, and a leaked marker would make a later 401 look like a loop.
+    try {
+      sessionStorage.removeItem('bff:lastLoginRedirect')
+    } catch {
+      /* ignore */
+    }
     history.replaceState({}, '', '/secret?ref=1')
   })
 
