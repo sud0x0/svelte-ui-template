@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { BffConfig } from './config.ts'
 import type { AuthRoutes } from './routes/auth.ts'
 import type { Proxy } from './proxy.ts'
-import { createApp } from './server.ts'
+import { createApp, hardenServer } from './server.ts'
 
 // The composition root's crash guard: a handler that throws (sync) or rejects
 // (async) must degrade to a 500 envelope for that one request, never take down
@@ -142,5 +142,68 @@ describe('createApp — handler crash guard', () => {
     const res = await fetch(`${h.base}/api/x`, { headers: { 'x-request-id': 'client-rid-1' } })
     expect(res.headers.get('x-request-id')).toBe('client-rid-1')
     expect(forwarded).toBe('client-rid-1')
+  })
+
+  // Fix 1: an untrusted X-Request-ID (bad charset or over the 64-char bound) is
+  // replaced with a fresh generated id before it is echoed / forwarded / logged.
+  it('sanitizes a hostile or oversized X-Request-ID (mints a fresh one)', async () => {
+    let forwarded: string | undefined
+    h = await mount({
+      proxy: {
+        api: (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+          forwarded = req.headers['x-request-id'] as string | undefined
+          res.writeHead(204)
+          res.end()
+          return Promise.resolve()
+        },
+      },
+    })
+
+    for (const hostile of ['spaces and quotes"', 'a'.repeat(65), 'has/slash', 'nl\tnope']) {
+      const res = await fetch(`${h.base}/api/x`, { headers: { 'x-request-id': hostile } })
+      const echoed = res.headers.get('x-request-id')
+      expect(echoed).not.toBe(hostile) // replaced
+      expect(echoed).toMatch(/^[A-Za-z0-9._-]{1,64}$/) // the sanitized shape
+      expect(forwarded).toBe(echoed) // same sanitized id forwarded upstream
+    }
+  })
+
+  // Fix 5: a request whose declared body exceeds the cap is refused with 413
+  // BEFORE the handler runs — it is never buffered or streamed upstream.
+  it('rejects an oversized request body with 413 before proxying', async () => {
+    let proxied = false
+    h = await mount({
+      proxy: {
+        api: (_req: IncomingMessage, res: ServerResponse): Promise<void> => {
+          proxied = true
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end('{"ok":true}')
+          return Promise.resolve()
+        },
+      },
+    })
+
+    const oversized = 'a'.repeat(1_048_577) // > MAX_BODY_BYTES (1 MiB)
+    const res = await fetch(`${h.base}/api/x`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: oversized,
+    })
+    expect(res.status).toBe(413)
+    expect(await res.json()).toEqual({
+      error: 'payload_too_large',
+      message: 'request body too large',
+    })
+    expect(proxied).toBe(false)
+  })
+
+  // Fix 5: the process-hardening knobs are applied (no port bind needed).
+  it('hardenServer sets request/headers timeouts and the per-socket request cap', () => {
+    const s = createServer(() => {})
+    hardenServer(s)
+    expect(s.requestTimeout).toBe(30_000)
+    expect(s.headersTimeout).toBe(10_000)
+    expect(s.maxRequestsPerSocket).toBe(100)
+    s.close()
   })
 })

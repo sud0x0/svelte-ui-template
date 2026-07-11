@@ -64,6 +64,11 @@ library, PKCE, or token parsing to `src/` — none of that belongs in the browse
 4. **Match the Go API**: its `OIDC_ISSUER_URL`/`OIDC_AUDIENCE` must equal what the
    IdP mints for this client. In this same-origin topology the Go CORS middleware
    can be removed (its own comment says so) — the browser never calls it cross-origin.
+   **Set the Go API's `TRUST_PROXY_HEADERS=true`** when it sits behind this BFF: the
+   BFF attaches `X-Forwarded-For` (its un-spoofable immediate peer by default, or a
+   preserved+appended trusted chain when `BFF_TRUSTED_PROXY=true`), and the Go API
+   only honours that header for real-client-IP logging / rate-limiting when it is
+   told to trust its proxy. Leave it `false` and the API sees the BFF's own IP.
 5. **Verify**: `make bff-test` (unit), `make test-e2e` (the `bff` Playwright
    project drives the real BFF against a stub IdP + API), then a staging run
    against the real IdP — the template cannot verify live OIDC.

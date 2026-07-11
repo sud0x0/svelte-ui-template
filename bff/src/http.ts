@@ -18,6 +18,20 @@ export function cookies(req: IncomingMessage): Record<string, string> {
 
 type ExtraHeaders = Record<string, string | string[]>
 
+// Baseline security headers set on EVERY BFF response (fix 4) so a DIRECTLY
+// exposed BFF (trustedProxy=false, no Caddy in front) is safe on its own —
+// Caddy's edge headers (Caddyfile, security.md rule 7) then become defence in
+// depth, not the only line. The BFF serves only JSON and redirects — no HTML, no
+// scripts — so the CSP is maximally locked down: nothing may load, and nothing
+// may frame it. (Proxied /api/* responses instead pass the Go API's own headers
+// through; the Go API sets its own nosniff/CSP.)
+const SECURITY_HEADERS: Record<string, string> = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+}
+
 /** Writes a JSON response with the given status. */
 export function sendJson(
   res: ServerResponse,
@@ -32,6 +46,7 @@ export function sendJson(
     // cached by the browser or an intermediary (ASVS V8.2, fix 10). `extra` can
     // still override per-response if a caller ever needs to.
     'Cache-Control': 'no-store',
+    ...SECURITY_HEADERS,
     ...extra,
   })
   res.end(payload)
@@ -39,13 +54,13 @@ export function sendJson(
 
 /** Writes an empty response (e.g. 204). */
 export function sendEmpty(res: ServerResponse, status: number, extra: ExtraHeaders = {}): void {
-  res.writeHead(status, extra)
+  res.writeHead(status, { ...SECURITY_HEADERS, ...extra })
   res.end()
 }
 
 /** 302 redirect, optionally setting cookies. */
 export function redirect(res: ServerResponse, location: string, setCookies: string[] = []): void {
-  const extra: ExtraHeaders = { Location: location }
+  const extra: ExtraHeaders = { ...SECURITY_HEADERS, Location: location }
   if (setCookies.length > 0) extra['Set-Cookie'] = setCookies
   res.writeHead(302, extra)
   res.end()

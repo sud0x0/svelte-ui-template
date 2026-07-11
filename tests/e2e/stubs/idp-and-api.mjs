@@ -50,6 +50,38 @@ const FORWARDING_HEADERS = [
 
 const b64url = (input) => Buffer.from(input).toString('base64url')
 
+/** Escapes a string for safe insertion into a double-quoted HTML attribute. */
+function htmlEscape(s) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+// Registered-redirect allowlist (loopback only — the E2E stack runs on localhost):
+// reject any redirect target that is not an absolute http(s) URL on a loopback
+// host, so an attacker-controlled query value never reaches a Location header
+// (js/server-side-unvalidated-url-redirection). Mirrors the BFF's config loopback check.
+function validatedRedirect(raw) {
+  if (!raw) return null
+  let u
+  try {
+    u = new URL(raw)
+  } catch {
+    return null
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+  const host = u.hostname.replace(/^\[|\]$/g, '')
+  const loopback =
+    host === 'localhost' ||
+    host === '::1' ||
+    host.endsWith('.localhost') ||
+    /^127(?:\.\d{1,3}){3}$/.test(host)
+  return loopback ? u : null
+}
+
 function signJwt(payload) {
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: KID }))
   const body = b64url(JSON.stringify(payload))
@@ -117,23 +149,35 @@ const server = createServer((req, res) => {
     //     observable after logout (no silent SSO auto-relogin). The link carries
     //     the original request params through to /authorize/consent. ---
     if (path === '/authorize') {
+      // Build the consent link from PERCENT-ENCODED params and HTML-ESCAPE the
+      // attribute value — never reflect raw url.search into the page (that is the
+      // reflected-XSS sink, js/reflected-xss). URLSearchParams.toString() already
+      // percent-encodes each value; htmlEscape neutralises the attribute context.
+      const consentHref = htmlEscape(`/authorize/consent?${url.searchParams.toString()}`)
       const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Stub IdP</title></head>
 <body><h1>Stub IdP login</h1>
-<a id="stub-login" href="/authorize/consent${url.search}">Sign in as Ada</a>
+<a id="stub-login" href="${consentHref}">Sign in as Ada</a>
 </body></html>`
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       return res.end(html)
     }
     if (path === '/authorize/consent') {
+      // Validate redirect_uri (registered-redirect allowlist) before it reaches a
+      // Location header — else it is an open redirect. Build the Location from the
+      // VALIDATED URL object, not the raw query value.
+      const target = validatedRedirect(url.searchParams.get('redirect_uri'))
+      if (!target) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' })
+        return res.end('invalid redirect_uri')
+      }
       const code = randomBytes(16).toString('hex')
       codes.set(code, {
         codeChallenge: url.searchParams.get('code_challenge') ?? '',
         nonce: url.searchParams.get('nonce') ?? '',
       })
-      const redirectUri = url.searchParams.get('redirect_uri') ?? '/'
-      const state = url.searchParams.get('state') ?? ''
-      const location = `${redirectUri}?code=${code}&state=${encodeURIComponent(state)}`
-      res.writeHead(302, { Location: location })
+      target.searchParams.set('code', code)
+      target.searchParams.set('state', url.searchParams.get('state') ?? '')
+      res.writeHead(302, { Location: target.href })
       return res.end()
     }
 
@@ -162,8 +206,12 @@ const server = createServer((req, res) => {
     }
 
     if (path === '/end-session') {
-      endSessionCount += 1 // fix 7: proves the RP-initiated logout actually landed here
-      res.writeHead(302, { Location: url.searchParams.get('post_logout_redirect_uri') ?? '/' })
+      endSessionCount += 1 // proves the RP-initiated logout actually landed here
+      // Validate the post-logout redirect (open-redirect guard); fall back to the
+      // issuer root when absent or not an allowed target.
+      const raw = url.searchParams.get('post_logout_redirect_uri')
+      const target = raw ? validatedRedirect(raw) : null
+      res.writeHead(302, { Location: target ? target.href : '/' })
       return res.end()
     }
 

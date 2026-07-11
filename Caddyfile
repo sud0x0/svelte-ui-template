@@ -22,7 +22,6 @@
 # can't reach on :80): replace the `tls { … }` block with `tls internal` and
 # delete the `http://{$SITE_ADDRESS}` redirect block. Run `caddy trust` on each
 # client to install the local root. See the README "Releases" section.
-
 {
 	email {$ACME_EMAIL}
 	servers {
@@ -94,6 +93,16 @@ http://{$SITE_ADDRESS} {
 	@backend path /api/* /auth/* /health
 	handle @backend {
 		reverse_proxy {$API_UPSTREAM} {
+			# These header_up directives are set EXPLICITLY on purpose, even though
+			# Caddy already populates X-Forwarded-For / X-Forwarded-Proto by default
+			# (so `caddy validate` may warn they are "unnecessary" — that warning is
+			# expected and accepted). Setting them to the un-spoofable connection
+			# values OVERWRITES anything the client sent: Caddy's default XFF APPENDS
+			# the peer to an inbound X-Forwarded-For, so without this a client could
+			# inject a forged `X-Forwarded-For: 1.2.3.4` the backend would then trust
+			# for per-IP rate-limiting / audit. {remote_host} is the real immediate
+			# client, {scheme} the real edge scheme. Defence in depth alongside the
+			# BFF's own XFF handling (bff/src/proxy.ts). Keep them explicit.
 			header_up Host {host}
 			header_up X-Real-IP {remote_host}
 			header_up X-Forwarded-For {remote_host}

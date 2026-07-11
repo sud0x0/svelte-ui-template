@@ -287,6 +287,43 @@ describe('auth routes (confidential OIDC flow)', () => {
     expect(idp.lastAuthorizeQuery?.get('audience')).toBeNull()
   })
 
+  it('the stub IdP rejects an off-origin redirect_uri (registered-redirect allowlist, fix 7)', async () => {
+    // A real IdP never redirects to an unregistered redirect_uri; the stub mirrors
+    // that so the CodeQL open-redirect sink is closed. A hostile off-origin value
+    // yields 400, not a 302 that bounces the browser to attacker-controlled origin.
+    const res = await fetch(
+      `${idp.issuer}/authorize?redirect_uri=${encodeURIComponent('https://evil.example/callback')}&state=x&code_challenge=y&nonce=z`,
+      { redirect: 'manual' }
+    )
+    expect(res.status).toBe(400)
+    expect(res.headers.get('location')).toBeNull()
+  })
+
+  it('logout with NO session is an idempotent 204, not a CSRF 403 (fix)', async () => {
+    // No session cookie and no CSRF token: there is nothing to log out, so the
+    // response is a clean 204 (with cookie-clearing), never the spurious 403 a
+    // blank session id used to produce.
+    const res = await fetch(`${base}/auth/logout`, {
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'same-origin' },
+      redirect: 'manual',
+    })
+    expect(res.status).toBe(204)
+    // Stale cookies are cleared for good measure (idempotent cleanup).
+    const setCookie = res.headers.getSetCookie().join('\n')
+    expect(setCookie).toContain('__Host-session=')
+    expect(setCookie).toContain('csrf=')
+  })
+
+  it('logout with a stale/unknown session cookie is also a 204 (no CSRF required)', async () => {
+    const res = await fetch(`${base}/auth/logout`, {
+      method: 'POST',
+      headers: { cookie: '__Host-session=does-not-exist', 'sec-fetch-site': 'same-origin' },
+      redirect: 'manual',
+    })
+    expect(res.status).toBe(204)
+  })
+
   it('logout without a valid CSRF token is 403', async () => {
     const { code, state, txn } = await beginLogin()
     const cbRes = await fetch(

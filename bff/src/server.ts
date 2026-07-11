@@ -1,4 +1,10 @@
-import { createServer, type RequestListener, type Server, type ServerResponse } from 'node:http'
+import {
+  createServer,
+  type IncomingMessage,
+  type RequestListener,
+  type Server,
+  type ServerResponse,
+} from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { randomUUID } from 'node:crypto'
@@ -17,6 +23,52 @@ export interface AppDeps {
   config: BffConfig
   authRoutes: AuthRoutes
   proxy: Proxy
+}
+
+// Correlation-id charset + length, mirroring go-api-template's SanitizeRequestID.
+// A client-supplied X-Request-ID is UNTRUSTED: it is echoed back on the response,
+// forwarded upstream to the Go API, and interpolated into a log line — so an
+// unbounded or control-char value would be a log-injection / oversized-log /
+// header-reflection vector. Accept only a short opaque token; otherwise mint a
+// fresh one (fix 1). The length bound lives in the pattern (`{1,64}`).
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
+
+/** Returns the client's X-Request-ID when it is a short, safe token; else a fresh UUID. */
+function sanitizeRequestId(raw: string | undefined): string {
+  return raw !== undefined && REQUEST_ID_PATTERN.test(raw) ? raw : randomUUID()
+}
+
+// Maximum accepted request-body size for /auth/* and /api/* (fix 5). Logs writes
+// and auth posts are small JSON; 1 MiB is generous. A declared Content-Length
+// over this is refused with 413 before the handler runs, so an oversized upload
+// cannot be buffered or streamed upstream. Undeclared (chunked) bodies are further
+// bounded by server.requestTimeout (see hardenServer) and the Go API's own limit.
+const MAX_BODY_BYTES = 1_048_576
+
+/**
+ * Rejects a request whose declared `Content-Length` exceeds `max` with a 413
+ * envelope, returning false so the caller skips dispatch. A non-consuming check —
+ * it never reads the body — so the /api/* streaming proxy is left intact.
+ */
+function withinBodyLimit(req: IncomingMessage, res: ServerResponse, max: number): boolean {
+  const declared = Number(req.headers['content-length'])
+  if (Number.isFinite(declared) && declared > max) {
+    sendJson(res, 413, { error: 'payload_too_large', message: 'request body too large' })
+    return false
+  }
+  return true
+}
+
+/**
+ * Hardens the HTTP server against slow-loris / socket-exhaustion (fix 5). Node's
+ * defaults are lenient for an internet-facing edge: bound how long a client may
+ * take to send headers and the whole request, and cap keep-alive pipelining per
+ * socket. Extracted (and exported) so it is unit-testable without binding a port.
+ */
+export function hardenServer(server: Server): void {
+  server.requestTimeout = 30_000 // the whole request must arrive within 30s
+  server.headersTimeout = 10_000 // headers within 10s (slow-loris guard)
+  server.maxRequestsPerSocket = 100 // cap keep-alive pipelining per connection
 }
 
 /**
@@ -64,10 +116,12 @@ export function createApp(deps: AppDeps): RequestListener {
     const path = url.pathname
 
     // Correlation id (fix 6): use the client's X-Request-ID, or GENERATE one if
-    // absent, so the chain UI -> BFF -> Go API is traceable. Write it back onto
-    // the request so the proxy forwards THIS id upstream, echo it on the response,
-    // and include it in the log line. It is an opaque id, never session material.
-    const requestId = header(req, 'x-request-id') ?? randomUUID()
+    // absent, so the chain UI -> BFF -> Go API is traceable. SANITIZE it first
+    // (fix 1) — the inbound value is untrusted and is echoed, forwarded, and
+    // logged, so a bad/oversized one is replaced with a fresh UUID. Write it back
+    // onto the request so the proxy forwards THIS id upstream, echo it on the
+    // response, and include it in the log line. An opaque id, never session material.
+    const requestId = sanitizeRequestId(header(req, 'x-request-id'))
     req.headers['x-request-id'] = requestId
     res.setHeader('X-Request-ID', requestId)
 
@@ -77,6 +131,13 @@ export function createApp(deps: AppDeps): RequestListener {
       const ms = Math.round(performance.now() - started)
       console.log(`${method} ${path} ${res.statusCode} ${ms}ms rid=${requestId}`)
     })
+
+    // Body-size cap (fix 5) on the surfaces that accept a body — /auth/* and
+    // /api/*. GET routes carry no body so the check is a no-op for them; it is
+    // applied uniformly so an oversized POST is refused before any handler runs.
+    const isAuth = path.startsWith('/auth/')
+    const isApi = path === '/api' || path.startsWith('/api/')
+    if ((isAuth || isApi) && !withinBodyLimit(req, res, MAX_BODY_BYTES)) return
 
     if (path === '/auth/login' && method === 'GET')
       return dispatch(res, () => authRoutes.login(req, res))
@@ -89,7 +150,7 @@ export function createApp(deps: AppDeps): RequestListener {
     if (path === '/health' || path === '/livez' || path === '/readyz') {
       return dispatch(res, () => proxy.health(req, res))
     }
-    if (path === '/api' || path.startsWith('/api/')) {
+    if (isApi) {
       return dispatch(res, () => proxy.api(req, res))
     }
 
@@ -109,6 +170,7 @@ async function main(): Promise<void> {
   const proxy = createProxy({ config, sessions, oidc })
 
   const server: Server = createServer(createApp({ config, authRoutes, proxy }))
+  hardenServer(server) // request/headers timeouts + per-socket request cap (fix 5)
   server.listen(config.port, () => {
     console.log(`bff listening on :${config.port} (upstream ${config.apiUpstream})`)
   })

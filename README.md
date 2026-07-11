@@ -176,10 +176,10 @@ XSS cannot exfiltrate one.
 
 ### Modes (`VITE_AUTH_MODE`)
 
-| Mode       | What happens                                                                                                                                                                                             |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `disabled` | No auth. `getCurrentUser()` resolves a static dev user so guarded views render; `login`/`logout` are no-ops. The auth seam is inert. Good for pure-frontend dev.                                         |
-| `bff`      | Live login through the BFF. `login()` navigates to `/auth/login`; `getCurrentUser()` calls `/auth/me`; `logout()` POSTs `/auth/logout`. The browser holds only the `__Host-` session cookie. E2E-tested. |
+| Mode       | What happens                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `disabled` | No auth. `getCurrentUser()` resolves a static dev user so guarded views render; `login`/`logout` are no-ops. The auth seam is inert. Good for pure-frontend dev. **Caveat:** the SPA sends no credential in this mode, so pointing it at a **real, auth-enabled Go API** makes authenticated resources 401 — the Home "Recent logs" card will show its error state. That is expected: run `bff` mode for real auth, or use `disabled` mode with a mock/no backend for pure UI work. |
+| `bff`      | Live login through the BFF. `login()` navigates to `/auth/login`; `getCurrentUser()` calls `/auth/me`; `logout()` POSTs `/auth/logout`. The browser holds only the `__Host-` session cookie. E2E-tested.                                                                                                                                                                                                                                                                            |
 
 ### The BFF's `/auth/*` and proxy endpoints
 

@@ -82,15 +82,23 @@ async function toApiError(response: Response): Promise<ApiError> {
   const text = await response.text()
   try {
     const parsed: unknown = JSON.parse(text)
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      typeof (parsed as Record<string, unknown>).error === 'string'
-    ) {
-      return parsed as ApiError
+    if (typeof parsed === 'object' && parsed !== null) {
+      const obj = parsed as Record<string, unknown>
+      if (typeof obj.error === 'string') {
+        return parsed as ApiError
+      }
+      // Parsed as JSON but NOT the {error,message} envelope — e.g. the Go API's
+      // /health 503 body `{"status":"unhealthy"}` (fix 8). NEVER dump raw JSON
+      // into a UI message. If the body carries a `status` (the health-probe
+      // shape), reflect it as a clean sentence (Svelte escapes it on render);
+      // otherwise synthesise a generic status message.
+      if (typeof obj.status === 'string') {
+        return { error: 'request_failed', message: `The backend reported status "${obj.status}".` }
+      }
+      return { error: 'request_failed', message: `Request failed (${response.status}).` }
     }
   } catch {
-    // fall through to a synthesised envelope
+    // Not JSON — a plain-text body is safe to surface directly (below).
   }
   return { error: 'request_failed', message: text || `Request failed (${response.status})` }
 }

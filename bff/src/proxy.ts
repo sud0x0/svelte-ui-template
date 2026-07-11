@@ -30,33 +30,29 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
 }
 
-// Hop-by-hop and identity headers we must NOT forward upstream. Authorization
-// and Cookie are stripped so the browser can never smuggle its own credentials
-// past the BFF — the ONLY Authorization the API sees is the one we attach.
-//
-// The proxy-trust / forwarding headers are ALSO stripped (item 2): a browser can
-// set X-Forwarded-For / X-Forwarded-Host / X-Forwarded-Proto / X-Real-IP /
-// Forwarded, and if the BFF relayed them verbatim the Go API might trust a SPOOFED
-// client IP, host, or scheme (rate-limit bypass, cache poisoning, wrong redirect
-// base). The credential-attaching BFF owns these headers, not the client
-// (security.md rule 11). A single trusted X-Forwarded-For is re-set below.
-const STRIP_REQUEST_HEADERS = new Set([
-  'authorization',
-  'cookie',
-  'host',
-  'connection',
-  'content-length',
-  'transfer-encoding',
-  'keep-alive',
-  'upgrade',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'x-forwarded-for',
-  'x-forwarded-host',
-  'x-forwarded-proto',
-  'x-real-ip',
-  'forwarded',
+// ALLOWLIST of request headers the BFF forwards upstream (fix 3). An allowlist is
+// safer than the blocklist it replaces: anything not named here is dropped by
+// DEFAULT, so a header a future browser (or a new proxy-trust variant) starts
+// sending cannot silently reach the Go API just because nobody remembered to add
+// it to a blocklist. What is deliberately EXCLUDED and therefore dropped:
+//   - Authorization / Cookie — so the browser can never smuggle its own credential
+//     past the BFF; the ONLY Authorization the API sees is the one we attach below
+//     (security.md rule 11). X-CSRF-Token is likewise not forwarded — the BFF
+//     consumes it; the Go API has no use for it.
+//   - X-Forwarded-For / X-Forwarded-Host / X-Forwarded-Proto / X-Real-IP /
+//     Forwarded — spoofable trust/identity headers (rate-limit bypass, cache
+//     poisoning, wrong redirect base). The credential-attaching BFF owns these; a
+//     single trusted X-Forwarded-For is re-set below (item 2).
+//   - host / connection / content-length / transfer-encoding / keep-alive /
+//     upgrade / te / trailer / proxy-authorization — hop-by-hop / framing headers
+//     undici re-derives for the upstream call.
+// What IS forwarded: the content negotiation headers the Go API legitimately
+// needs, plus the X-Request-ID correlation id.
+const FORWARD_REQUEST_HEADERS = new Set([
+  'accept',
+  'accept-language',
+  'content-type',
+  'x-request-id',
 ])
 
 // Response headers that describe the ON-THE-WIRE encoding of the upstream body.
@@ -146,14 +142,14 @@ export function createProxy(deps: ProxyDeps): Proxy {
     res: ServerResponse,
     accessToken: string | undefined
   ): Promise<void> {
-    // Capture the inbound X-Forwarded-For BEFORE the strip loop removes it (it is
-    // in STRIP_REQUEST_HEADERS). Its trustworthiness depends on the topology (below).
+    // Read the inbound X-Forwarded-For directly (it is not in the allowlist, so
+    // the forward loop drops it). Its trustworthiness depends on the topology (below).
     const inboundXff = header(req, 'x-forwarded-for')
 
     const headers = new Headers()
     for (const [name, value] of Object.entries(req.headers)) {
-      if (value === undefined || STRIP_REQUEST_HEADERS.has(name.toLowerCase())) continue
-      // X-Request-ID and other tracing/content headers pass through here.
+      if (value === undefined || !FORWARD_REQUEST_HEADERS.has(name.toLowerCase())) continue
+      // Only allowlisted headers (content negotiation + X-Request-ID) pass through.
       for (const v of Array.isArray(value) ? value : [value]) headers.append(name, v)
     }
     // X-Forwarded-For (item 2 + fix 11). The immediate peer address is always

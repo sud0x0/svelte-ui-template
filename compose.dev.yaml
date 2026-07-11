@@ -13,7 +13,10 @@ services:
       - .:/app:Z
       - node_modules:/app/node_modules:Z
     ports:
-      - '3000:3000'
+      # Bind to loopback only: the dev server is for THIS machine, not the LAN.
+      # Without the 127.0.0.1 prefix the port publishes on 0.0.0.0 and anyone on
+      # the network can reach the dev stack (and its backend proxy) (fix 2).
+      - '127.0.0.1:3000:3000'
     environment:
       # Where the Vite dev proxy forwards /api, /auth, /health. The target
       # depends on the auth mode:
@@ -39,7 +42,10 @@ services:
       dockerfile: container.bff
     container_name: svelte_bff
     ports:
-      - '8081:8081'
+      # Loopback only (fix 2) — same reasoning as the app service above. The BFF
+      # is reached in-compose via the service name (http://bff:8081); this host
+      # publish is a dev convenience, not a LAN-exposed endpoint.
+      - '127.0.0.1:8081:8081'
     environment:
       BFF_PORT: '8081'
       # The UI origin the browser reaches the BFF THROUGH (Vite :3000 proxies

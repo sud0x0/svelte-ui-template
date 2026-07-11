@@ -129,6 +129,39 @@ describe('authenticated proxy', () => {
     expect(upstream.headers.get('x-request-id')).toBe('req-42')
   })
 
+  it('forwards ONLY allowlisted request headers upstream (allowlist, fix 3)', async () => {
+    h = await mount({})
+    const sid = await h.sessions.create(session(tokens()))
+    const res = await fetch(`${h.base}/api/v1/logs`, {
+      method: 'POST',
+      headers: {
+        cookie: `__Host-session=${sid}`,
+        'x-csrf-token': csrfToken(SECRET, sid),
+        'sec-fetch-site': 'same-origin',
+        'content-type': 'application/json',
+        accept: 'application/json',
+        'x-request-id': 'rid-allow',
+        // Not on the allowlist — must NOT reach the upstream.
+        'x-secret-internal': 'leak-me',
+        'x-custom-tracking': 'nope',
+      },
+      body: JSON.stringify({ a: 1 }),
+    })
+    expect(res.status).toBe(200)
+    const up = h.captured[0].headers
+    // Allowlisted headers pass through.
+    expect(up.get('content-type')).toBe('application/json')
+    expect(up.get('accept')).toBe('application/json')
+    expect(up.get('x-request-id')).toBe('rid-allow')
+    // Everything else is dropped by default — including the SPA's CSRF token,
+    // which the BFF consumes and the Go API has no use for.
+    expect(up.has('x-secret-internal')).toBe(false)
+    expect(up.has('x-custom-tracking')).toBe(false)
+    expect(up.has('x-csrf-token')).toBe(false)
+    expect(up.has('cookie')).toBe(false)
+    expect(up.has('sec-fetch-site')).toBe(false)
+  })
+
   it('strips inbound forwarding headers and re-sets a single trusted X-Forwarded-For (item 2)', async () => {
     h = await mount({})
     const sid = await h.sessions.create(session(tokens()))

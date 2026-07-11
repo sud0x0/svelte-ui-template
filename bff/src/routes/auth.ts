@@ -187,7 +187,20 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
 
     async logout(req, res) {
       const sid = cookies(req)[SESSION_COOKIE] ?? ''
-      // CSRF-protected (unsafe method): Sec-Fetch-Site gate, then signed token.
+      const session = sid ? await sessions.get(sid) : undefined
+      const clearCookies = [clearHostCookie(SESSION_COOKIE, { httpOnly: true }), clearCsrfCookie()]
+
+      // Idempotent (fix): with NO active session there is nothing to log out and
+      // no state to change, so answer 204 (clearing any stale cookies) WITHOUT a
+      // CSRF challenge. A blank/stale session id previously failed the signed-token
+      // check and returned a spurious 403. CSRF matters only for a REAL logout —
+      // which is guarded below. The session lookup is read-only, so doing it before
+      // the CSRF check is safe, and a cross-site probe learns nothing (opaque 204).
+      if (!session) {
+        return sendEmpty(res, 204, { 'Set-Cookie': clearCookies })
+      }
+
+      // Real logout: CSRF-protected (unsafe method): Sec-Fetch-Site gate, then signed token.
       const guard = guardUnsafeRequest({
         method: 'POST',
         secFetchSite: header(req, 'sec-fetch-site'),
@@ -202,12 +215,10 @@ export function createAuthRoutes(deps: AuthRoutesDeps): AuthRoutes {
         )
       }
 
-      const session = sid ? await sessions.get(sid) : undefined
-      if (sid) await sessions.destroy(sid)
-      const clearCookies = [clearHostCookie(SESSION_COOKIE, { httpOnly: true }), clearCsrfCookie()]
+      await sessions.destroy(sid)
 
       // RP-initiated logout when the IdP advertises end_session_endpoint; else 204.
-      if (session?.tokens.idToken !== undefined && oidc.hasEndSession()) {
+      if (session.tokens.idToken !== undefined && oidc.hasEndSession()) {
         const logoutUrl = oidc.endSessionUrl(session.tokens.idToken)
         return sendJson(res, 200, { logout_url: logoutUrl }, { 'Set-Cookie': clearCookies })
       }

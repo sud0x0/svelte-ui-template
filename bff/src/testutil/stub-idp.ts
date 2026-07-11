@@ -11,6 +11,32 @@ function base64url(input: string | Buffer): string {
   return Buffer.from(input).toString('base64url')
 }
 
+/**
+ * Validates an OAuth redirect target the way a real IdP validates a REGISTERED
+ * redirect_uri: it must be an absolute http(s) URL on a loopback host (every test
+ * client runs on loopback). Returns a parsed URL when allowed, else null — so the
+ * caller never writes an unvalidated, attacker-controlled query value into a
+ * Location header (the js/server-side-unvalidated-url-redirection sink). Mirrors
+ * config.ts's loopback check.
+ */
+function validatedRedirect(raw: string | null): URL | null {
+  if (!raw) return null
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return null
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+  const host = u.hostname.replace(/^\[|\]$/g, '')
+  const loopback =
+    host === 'localhost' ||
+    host === '::1' ||
+    host.endsWith('.localhost') ||
+    /^127(?:\.\d{1,3}){3}$/.test(host)
+  return loopback ? u : null
+}
+
 /** Minimal RS256 JWT signer (~15 lines) — enough for ID tokens in tests. */
 function signJwt(payload: Record<string, unknown>, privateKey: KeyObject, kid: string): string {
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid }))
@@ -121,17 +147,25 @@ export async function startStubIdp(): Promise<StubIdp> {
 
       if (path === '/authorize') {
         state.lastAuthorizeQuery = url.searchParams
-        // Record the challenge + nonce keyed by a fresh code, then 302 back.
+        // A real IdP only ever redirects to a REGISTERED redirect_uri. Validate it
+        // before writing it into a Location header, else it is an open redirect; on
+        // failure reject like a real IdP would (never redirect to an unknown URI).
+        const target = validatedRedirect(url.searchParams.get('redirect_uri'))
+        if (!target) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' })
+          return res.end('invalid redirect_uri')
+        }
+        // Record the challenge + nonce keyed by a fresh code, then 302 back. The
+        // Location is built from the VALIDATED URL object, not the raw query value.
         const code = randomBytes(16).toString('hex')
         codes.set(code, {
           codeChallenge: url.searchParams.get('code_challenge') ?? '',
           nonce: url.searchParams.get('nonce') ?? '',
           clientId: url.searchParams.get('client_id') ?? '',
         })
-        const redirectUri = url.searchParams.get('redirect_uri') ?? ''
-        const reqState = url.searchParams.get('state') ?? ''
-        const location = `${redirectUri}?code=${code}&state=${encodeURIComponent(reqState)}`
-        res.writeHead(302, { Location: location })
+        target.searchParams.set('code', code)
+        target.searchParams.set('state', url.searchParams.get('state') ?? '')
+        res.writeHead(302, { Location: target.href })
         return res.end()
       }
 
@@ -187,7 +221,11 @@ export async function startStubIdp(): Promise<StubIdp> {
       }
 
       if (path === '/end-session') {
-        res.writeHead(302, { Location: url.searchParams.get('post_logout_redirect_uri') ?? '/' })
+        // Validate the post-logout redirect the same way (open-redirect guard);
+        // fall back to the issuer root when absent or not an allowed target.
+        const raw = url.searchParams.get('post_logout_redirect_uri')
+        const target = raw ? validatedRedirect(raw) : null
+        res.writeHead(302, { Location: target ? target.href : '/' })
         return res.end()
       }
 

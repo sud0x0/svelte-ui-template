@@ -102,6 +102,26 @@ describe('api client', () => {
     })
   })
 
+  it('maps a non-envelope JSON error body to a clean message, not raw JSON (fix 8)', async () => {
+    // The Go /health 503 body `{"status":"unhealthy"}` has no `error` field, so the
+    // old code dumped the raw JSON into the UI. Now it surfaces a clean sentence.
+    worker.use(
+      http.get('/health', () => HttpResponse.json({ status: 'unhealthy' }, { status: 503 }))
+    )
+    await expect(request('/health')).rejects.toMatchObject({
+      error: 'request_failed',
+      message: 'The backend reported status "unhealthy".',
+    })
+  })
+
+  it('synthesises a generic status message for a non-envelope JSON body without a status (fix 8)', async () => {
+    worker.use(http.get('/api/weird', () => HttpResponse.json({ detail: 'nope' }, { status: 500 })))
+    await expect(request('/api/weird')).rejects.toMatchObject({
+      error: 'request_failed',
+      message: 'Request failed (500).',
+    })
+  })
+
   it('returns undefined for 204 No Content', async () => {
     worker.use(http.delete('/api/thing', () => new HttpResponse(null, { status: 204 })))
     await expect(request('/api/thing', { method: 'DELETE' })).resolves.toBeUndefined()
